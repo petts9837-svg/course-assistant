@@ -9,10 +9,14 @@ Fetches course outline details (JSON) for courses already in courses.db.
     python fju_outline_fetcher.py --dump 741436     # 先看一門課的原始回應長什麼樣子
     python fju_outline_fetcher.py --limit 5         # 抓 5 門測試
     python fju_outline_fetcher.py                   # 抓 courses.db 裡全部課程
+    python fju_outline_fetcher.py --show 741436     # 看一門課整理後的全文
+    python fju_outline_fetcher.py --rebuild         # 不連網，重建整理後的資料表
 
 資料表:
-    outline_raw (jonCouSn, endpoint, json)   每支 API 的原始 JSON（之後抽評量比例用）
-    outlines    (jonCouSn, text)             攤平後的大綱全文（RAG 用）
+    outline_raw    每支 API 的原始 JSON
+    outlines       整理過的大綱全文（RAG 用）
+    outline_fields 評分方式、課程目標、班級等單一欄位
+    methods        教學 / 評量方法與百分比（只存 > 0%）
 """
 
 import argparse
@@ -56,34 +60,14 @@ def fetch_endpoint(endpoint, sn, tch_no, needs_tch):
 
 
 TAG_RE = re.compile(r"<[^>]+>")
-SKIP_KEYS = {"statusCode", "message", "errorMessage"}
 
 
-def clean(s: str) -> str:
-    s = html.unescape(TAG_RE.sub(" ", s))  # 大綱內容常含 HTML 標籤
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def flatten_text(obj, key=""):
-    """把 JSON 裡所有有意義的文字攤平成 'key: value' 行。"""
-    lines = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if k not in SKIP_KEYS:
-                lines += flatten_text(v, k)
-    elif isinstance(obj, list):
-        for v in obj:
-            lines += flatten_text(v, key)
-    elif isinstance(obj, str):
-        t = clean(obj)
-        # 跳過空值、單一代碼字元、純數字 ID
-        if len(t) > 1 and not t.isdigit():
-            lines.append(f"{key}: {t}")
-    elif isinstance(obj, (int, float)) and not isinstance(obj, bool):
-        # 保留百分比、配分之類的數字欄位，ID 類欄位略過
-        if not key.lower().endswith(("sn", "no", "id", "order", "group")):
-            lines.append(f"{key}: {obj}")
-    return lines
+def clean(s) -> str:
+    if not s:
+        return ""
+    s = html.unescape(TAG_RE.sub(" ", str(s)))  # 大綱內容可能含 HTML 標籤
+    s = re.sub(r"[ \t\r\f\v]+", " ", s)
+    return re.sub(r"\n\s*\n+", "\n", s).strip()
 
 
 def init_tables(conn):
@@ -94,25 +78,123 @@ def init_tables(conn):
             json     TEXT,
             PRIMARY KEY (jonCouSn, endpoint)
         );
+        -- 整理過的大綱全文（RAG 用）
         CREATE TABLE IF NOT EXISTS outlines (
             jonCouSn INTEGER PRIMARY KEY,
             text     TEXT
         );
+        -- 重要的單一欄位（SQL 篩選、驗證 agent 查證用）
+        CREATE TABLE IF NOT EXISTS outline_fields (
+            jonCouSn   INTEGER PRIMARY KEY,
+            day_type   TEXT,   -- 日間部 / 進修部
+            dept_class TEXT,   -- 開課班級，例如 大傳學程二甲
+            tea_lang   TEXT,   -- 授課語言
+            objective  TEXT,   -- 課程目標
+            content    TEXT,   -- 課程內容
+            norms      TEXT,   -- 評分方式（自由文字，例如 期中考25% 期末考25%…）
+            book       TEXT,
+            ref_book   TEXT,
+            pre_course TEXT
+        );
+        -- 教學 / 評量方法，只存 percent > 0 的項目
+        CREATE TABLE IF NOT EXISTS methods (
+            jonCouSn    INTEGER,
+            mType       INTEGER,
+            mName       TEXT,     -- 方法類別，例如 教學方法
+            method_name TEXT,     -- 例如 講述、實作教學
+            percent     REAL
+        );
     """)
 
 
+def _result(raw, endpoint):
+    data = raw.get(endpoint) or {}
+    return data.get("result")
+
+
+def build_records(sn, raw):
+    """raw: {endpoint: json}。回傳 (全文, fields tuple, methods list)。"""
+    d = _result(raw, "CourseDetailsData") or {}
+    ib = _result(raw, "CourseInfoAndBook") or {}
+    cp = _result(raw, "CourseCP") or {}
+    rel = _result(raw, "CourseRelations") or []
+    mth = _result(raw, "CourseMethods") or []
+
+    methods = []
+    for group in mth:
+        for m in group.get("methodsDetails") or []:
+            if (m.get("percent") or 0) > 0:  # 0% 的項目是雜訊，丟掉
+                methods.append((sn, group.get("mType"), group.get("mName"),
+                                m.get("methodName"), m.get("percent")))
+
+    fields = (sn, d.get("dayCNa"), d.get("dptGrdCN"), d.get("teaLangCNa"),
+              clean(ib.get("obj")), clean(ib.get("cm")), clean(ib.get("norms")),
+              clean(ib.get("book")), clean(ib.get("refBook")), clean(ib.get("preCourse")))
+
+    lines = [
+        f"課程名稱：{d.get('couCNa', '')}（{d.get('couENa', '')}）",
+        f"授課教師：{d.get('tchCNa', '')}",
+        f"學分：{d.get('credit', '')}　{d.get('reqSelCNa', '')}",
+        f"開課班級：{d.get('dayCNa', '')} {d.get('dptGrdCN', '')}",
+        f"上課時間：{'；'.join(d.get('seqList') or [])}",
+        f"授課語言：{d.get('teaLangCNa', '')}",
+    ]
+    for label, value in [("課程目標", fields[4]), ("先修課程", fields[9]),
+                         ("課程內容", fields[5]), ("評分方式", fields[6]),
+                         ("教科書", fields[7]), ("參考書", fields[8])]:
+        if value:
+            lines.append(f"{label}：\n{value}")
+
+    by_type = {}
+    for _, _, mname, name, pct in methods:
+        by_type.setdefault(mname, []).append(f"{name} {pct:g}%")
+    for mname, items in by_type.items():
+        lines.append(f"{mname}：{'、'.join(items)}")
+
+    weeks = []
+    for w in cp.get("weeklyCP") or []:
+        theme = clean(w.get("theme")).replace("\n", " ")
+        if theme:
+            weeks.append(f"第{w.get('cweek')}週 {theme}")
+    if weeks:
+        lines.append("每週進度：\n" + "\n".join(weeks))
+
+    cores = [r.get("itemName") for r in rel if (r.get("relation") or 0) > 0]
+    if cores:
+        lines.append(f"對應核心能力：{'、'.join(cores)}")
+
+    return "\n".join(lines), fields, methods
+
+
+def save_records(conn, sn, raw):
+    text, fields, methods = build_records(sn, raw)
+    conn.execute("INSERT OR REPLACE INTO outlines VALUES (?,?)", (sn, text))
+    conn.execute("INSERT OR REPLACE INTO outline_fields VALUES (?,?,?,?,?,?,?,?,?,?)", fields)
+    conn.execute("DELETE FROM methods WHERE jonCouSn=?", (sn,))
+    conn.executemany("INSERT INTO methods VALUES (?,?,?,?,?)", methods)
+
+
 def fetch_course(conn, sn, tch_no):
-    texts = []
+    raw = {}
     for endpoint, needs_tch in ENDPOINTS:
         data = fetch_endpoint(endpoint, sn, tch_no, needs_tch)
+        raw[endpoint] = data
         conn.execute("INSERT OR REPLACE INTO outline_raw VALUES (?,?,?)",
                      (sn, endpoint, json.dumps(data, ensure_ascii=False)))
-        body = flatten_text(data)
-        if body:
-            texts.append(f"## {endpoint}\n" + "\n".join(body))
         time.sleep(SLEEP_SECONDS)
-    conn.execute("INSERT OR REPLACE INTO outlines VALUES (?,?)", (sn, "\n\n".join(texts)))
+    save_records(conn, sn, raw)
     conn.commit()
+
+
+def rebuild(conn):
+    """不重新連線，直接用 outline_raw 重建整理後的資料表（改了整理邏輯時用）。"""
+    raws = {}
+    for sn, endpoint, js in conn.execute("SELECT jonCouSn, endpoint, json FROM outline_raw"):
+        raws.setdefault(sn, {})[endpoint] = json.loads(js)
+    for sn, raw in raws.items():
+        save_records(conn, sn, raw)
+    conn.commit()
+    print(f"已重建 {len(raws)} 門課的整理資料")
 
 
 def dump(conn, sn):
@@ -134,6 +216,8 @@ def main():
     p.add_argument("--limit", type=int, default=None, help="只抓前 N 門（測試用）")
     p.add_argument("--dump", type=int, default=None, help="印出一門課的原始回應")
     p.add_argument("--refetch", action="store_true", help="已抓過的課也重抓")
+    p.add_argument("--rebuild", action="store_true", help="不連網，用已抓的原始資料重建整理後的資料表")
+    p.add_argument("--show", type=int, default=None, help="印出一門課整理後的全文")
     args = p.parse_args()
 
     if not Path(args.db).exists():
@@ -143,6 +227,13 @@ def main():
 
     if args.dump:
         dump(conn, args.dump)
+        return
+    if args.rebuild:
+        rebuild(conn)
+        return
+    if args.show:
+        row = conn.execute("SELECT text FROM outlines WHERE jonCouSn=?", (args.show,)).fetchone()
+        print(row[0] if row else f"{args.show} 還沒抓")
         return
 
     done = set() if args.refetch else {r[0] for r in conn.execute("SELECT jonCouSn FROM outlines")}
