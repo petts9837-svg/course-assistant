@@ -91,7 +91,7 @@ def init_tables(conn):
             tea_lang   TEXT,   -- 授課語言
             objective  TEXT,   -- 課程目標
             content    TEXT,   -- 課程內容
-            norms      TEXT,   -- 評分方式（自由文字，例如 期中考25% 期末考25%…）
+            norms      TEXT,   -- 課堂規範（自由文字；少數老師會寫評分比例）
             book       TEXT,
             ref_book   TEXT,
             pre_course TEXT
@@ -140,7 +140,9 @@ def build_records(sn, raw):
         f"授課語言：{d.get('teaLangCNa', '')}",
     ]
     for label, value in [("課程目標", fields[4]), ("先修課程", fields[9]),
-                         ("課程內容", fields[5]), ("評分方式", fields[6]),
+                         # norms 欄位大多是「課堂規範」（出席、遲交規定），不是評分比例；
+                         # 評分比例在 CourseMethods 的「學習評量」裡。
+                         ("課程內容", fields[5]), ("課堂規範", fields[6]),
                          ("教科書", fields[7]), ("參考書", fields[8])]:
         if value:
             lines.append(f"{label}：\n{value}")
