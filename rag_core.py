@@ -31,7 +31,7 @@ INDEX_PATH = Path("data") / "vector_index.npz"
 LOG_PATH = Path("data") / "qa_log.jsonl"
 
 EMBED_MODEL = os.environ.get("CF_EMBED_MODEL", "@cf/baai/bge-m3")
-CHAT_MODEL = os.environ.get("CF_CHAT_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8")
+CHAT_MODEL = os.environ.get("CF_CHAT_MODEL", "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
 
 SYSTEM_PROMPT = """你是輔仁大學的選課助理。請只根據下方「參考課程大綱」回答使用者的問題，用繁體中文回答。
 回答時列出符合的課程名稱、授課教師、學分與上課時間。"""

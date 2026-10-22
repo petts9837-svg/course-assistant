@@ -24,7 +24,7 @@
    （`set` 只對目前視窗有效；想永久保存用 `setx`，設完要重開視窗。）
 
 ## 執行
-如果組員已經給你 `courses.db`，跳過步驟 1、2。
+repo 裡已經附上 `courses.db`，可以跳過步驟 1、2，直接從步驟 3 開始。
 ```
 python fju_list_scraper.py --hy 115 --ht 1 --keyword 程式   # 1. 抓課程清單（可換關鍵字多抓幾次）
 python fju_outline_fetcher.py                             # 2. 抓大綱
@@ -38,5 +38,7 @@ streamlit run app.py                                      # 4. 開啟網頁 http
 - 所有問答自動記錄在 `data/qa_log.jsonl`，寫 AI Verification Log 時使用。
 
 ## 注意
-- `courses.db` 和 `data/` 是學校課程資料，只在組內使用，不公開上傳（已寫在 `.gitignore`）。
+- **這個 repo 必須保持 private**：`courses.db` 是學校課程資料，只在組內使用。
+- `courses.db` 由組長統一更新後上傳，其他人不要自己重抓後 push，避免檔案衝突。
+- `data/`（向量索引、問答紀錄）每個人自己產生，不上傳。
 - 抓資料時程式已設定每次請求間隔 1 秒以上，請勿調低。
