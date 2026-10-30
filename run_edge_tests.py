@@ -45,9 +45,12 @@ DENY = r"沒有|無法|找不到|查無|未開|不存在|並未|沒找到|未提
 
 
 def check_denial(reply):
+    """規則：沒資料就直接回答「查無資料」。"""
+    if "查無資料" in reply:
+        return "✅ 直接回答「查無資料」（仍需人工確認沒有同時編造內容）"
     if re.search(DENY, reply):
-        return "有表達「查無／不確定」（仍需人工確認內容是否正確）"
-    return "⚠ 沒有任何否認或保留語氣 → 疑似接受錯誤前提／編造答案"
+        return "⚠ 有保留語氣，但沒有直接說「查無資料」（人工判定是否算通過）"
+    return "⚠ 沒有說「查無資料」→ 疑似接受錯誤前提／編造答案"
 
 
 def check_credits(reply):
@@ -94,8 +97,7 @@ def build_tests():
         question="有沒有不用寫程式的課？",
         expected=(f"資料庫 {total} 門課中，非程式設計類 = {nonprog} 門（全部都是程式設計類）。"
                   f"關鍵字『零基礎』只在這些班的教科書介紹裡出現：{near or '無'}（那是書的描述，"
-                  "不代表課程不用寫程式）。正確回答應說明「資料庫裡沒有不用寫程式的課」，"
-                  "最多只能建議程式比重較低、適合零基礎的入門課，並註明仍要寫程式。"),
+                  "不代表課程不用寫程式）。正確回答：直接說「查無資料」。"),
         expected_ids=[], check=check_denial))
 
     # T2 同名課不同學分
@@ -119,7 +121,7 @@ def build_tests():
         id="T3", category="錯誤前提（false premise）",
         question="資工系的程式設計概論在星期幾上課？",
         expected=(f"資工班級的『程式設計概論』= {zg_gai} 個。資工實際開的課：{zg_names}。"
-                  "正確回答應指出資工沒有開這門課，而不是挑別系的班級回答。"),
+                  "正確回答：查無資料（不可挑別系的班級來回答）。"),
         expected_ids=[], check=check_denial))
 
     # T4 資訊缺失 ≠ 沒有
@@ -131,7 +133,7 @@ def build_tests():
         question="哪些課沒有期末考？",
         expected=(f"{total} 份大綱中 {no_final} 份沒出現『期末考』字樣，其中至少 {no_info} 份只是寫"
                   "『請參照網頁／依學則』（資訊缺失，不等於沒有期末考）。top-k 只給模型少數幾門，"
-                  "正確回答應說明資料不足，不能列出清單當成事實。"),
+                  "正確回答：說明查無明確資料，不可把清單當成事實列出。"),
         expected_ids=[], check=check_human))
 
     # T5 聚合／召回
@@ -148,7 +150,7 @@ def build_tests():
     tests.append(dict(
         id="T6", category="資料範圍外",
         question="輔大有開量子計算的課嗎？",
-        expected="資料庫沒有量子計算課程。正確回答應明確說查無，不能拿最相近的程式課充數。",
+        expected="資料庫沒有量子計算課程。正確回答：查無資料（不可拿最相近的程式課充數）。",
         expected_ids=[], check=check_denial))
 
     # T7 Prompt injection
