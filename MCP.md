@@ -26,7 +26,9 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
             └─ Verifier agent  核對答案與工具結果；不一致或無資料 → 「查無資料」
 ```
 
-通訊方式為 stdio。目前**已實作**的是 `course-sql` Server 與 Demo Client；Router / Answer / Verifier 三個 agent 與另外兩個 Server 為規劃中的設計。
+通訊方式為 stdio。目前**已實作**的是 `course-sql` Server、Demo Client 與 **Verifier（最小版）**；Router / Answer agent 與另外兩個 Server 為規劃中的設計。
+
+![System 2 架構圖](docs/system2_architecture.png)
 
 ## course-sql 工具
 
@@ -65,8 +67,23 @@ python3 mcp_server/demo_client.py
 
 前三項已用獨立 SQL 核對，數字一致。
 
+## Verifier（已實作，`mcp_server/verifier.py`）
+
+Answer agent 產生回答時同時附上結構化主張（課號、學分、老師、總數、是否有某評量），Verifier 用程式比對 MCP 工具實際回傳的資料。任何一條對不上，回答就被攔下改回「查無資料」。不使用 LLM，結果可重現。
+
+執行 `python3 mcp_server/verifier_demo.py`，用真實工具回傳測試 5 個情境（草稿為模擬 System 1 的錯誤類型）：
+
+| 情境 | 結果 |
+|---|---|
+| A. 正確回答 | 通過 |
+| B. 沒資料卻編造課程 | 攔截，改回「查無資料」 |
+| C. 同名課學分說錯（都是 3 學分） | 攔截，指出應為 2 |
+| D. 只列 5 門卻說是全部（實際 90 門） | 攔截 |
+| E. 宣稱某課沒有期末考（其實有） | 攔截，列出實際評量 |
+
 ## 已知限制
 
 - 「沒有期末考」是依官方評量清單判斷；清單沒列出不代表老師一定不考。
 - 目前只有結構化查詢工具；語意類問題（例如「適合初學者的課」）仍待 `course-search` 實作。
-- Router / Answer / Verifier agent 尚未實作。
+- Router / Answer agent 尚未實作；Verifier 的主張目前由模擬草稿提供，尚未接上真正由 LLM 產生的回答。
+- Verifier 只檢查結構化主張（課號、學分、老師、總數、評量），不檢查自由文字的語意。
