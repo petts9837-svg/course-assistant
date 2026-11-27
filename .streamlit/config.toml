@@ -1,6 +1,2 @@
-# 現場 Demo 用：隱藏右上角 Deploy 等開發者選單
-[client]
-toolbarMode = "minimal"
-
 [browser]
 gatherUsageStats = false

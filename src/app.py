@@ -19,6 +19,8 @@ from mcp_hub import MCPHub          # noqa: E402
 from pipeline import Assistant      # noqa: E402
 
 st.set_page_config(page_title="輔大選課助理 System 2", page_icon="📚", layout="wide")
+# 只隱藏右上角的 Deploy 按鈕；「⋮」選單（重新執行、設定、清除快取…）保留
+st.markdown("<style>[data-testid=\"stAppDeployButton\"]{display:none}</style>", unsafe_allow_html=True)
 
 
 @st.cache_resource
