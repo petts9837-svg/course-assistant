@@ -6,7 +6,7 @@ demo_client.py：System 2 的 MCP Client 示範
 
 執行（在專案根目錄）：
     pip install fastmcp
-    python mcp_server/demo_client.py
+    python src/demos/demo_client.py
 """
 import asyncio
 import json
@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastmcp import Client
 
-SERVER = str(Path(__file__).resolve().parent / "course_sql_server.py")
+SERVER = str(Path(__file__).resolve().parents[1] / "mcp_servers" / "course_sql_server.py")
 
 
 def data(result):

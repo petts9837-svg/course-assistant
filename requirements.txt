@@ -1,3 +1,4 @@
 requests
 numpy
 streamlit
+fastmcp>=2.10

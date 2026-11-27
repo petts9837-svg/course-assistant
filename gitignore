@@ -1,7 +1,0 @@
-# 學校資料與產生的檔案，不要上傳
-courses.db
-data/
-# 憑證
-.env
-.streamlit/secrets.toml
-__pycache__/
