@@ -57,7 +57,7 @@
 </div>
 <div class="box" style="left:710px; top:240px; width:300px; height:190px;">
   <h3>Router agent<span class="tag t-llm">LLM</span></h3>
-  <p>Chooses tool + args as JSON, schema-checked; follow-ups reuse the last course ID</p>
+  <p>Native tool calling on MCP tool schemas; names from match_terms</p>
 </div>
 <div class="box teal" style="left:1060px; top:240px; width:340px; height:190px;">
   <h3>MCP Client<span class="tag t-built">BUILT</span></h3>
@@ -68,7 +68,7 @@
 <!-- orchestrator: bottom row (right to left) -->
 <div class="box" style="left:1060px; top:600px; width:340px; height:230px;">
   <h3>Answer agent<span class="tag t-llm">LLM</span></h3>
-  <p>Writes only from tool results, one line per course with its ID:<br><span class="mono">[課號] 課名｜老師｜學分</span></p>
+  <p>Writes a short summary and picks course IDs; course lines are rendered from tool data</p>
 </div>
 <div class="box navy" style="left:710px; top:600px; width:300px; height:230px;">
   <h3>Verifier agent<span class="tag t-rule">RULES</span></h3>
@@ -86,9 +86,9 @@
 <!-- servers -->
 <div class="box teal" style="left:1500px; top:230px; width:450px; height:330px;">
   <h3>course-sql<span class="tag t-built">BUILT</span></h3>
-  <p class="mono">filter_courses · list_sections<br>get_course · check_assessment</p>
-  <p style="margin-top:8px">Resources: <span class="mono">courses://catalog<br>courses://stats</span></p>
-  <p style="margin-top:8px">Read-only SQL, returns exact <b>count</b></p>
+  <p class="mono">filter_courses · list_sections<br>get_course · check_assessment<br>match_terms</p>
+  <p style="margin-top:6px">Resources: <span class="mono">courses://catalog, courses://stats</span></p>
+  <p style="margin-top:6px">Read-only SQL, returns exact <b>count</b></p>
 </div>
 <div class="box teal" style="left:1500px; top:590px; width:450px; height:280px;">
   <h3>course-search<span class="tag t-built">BUILT</span></h3>

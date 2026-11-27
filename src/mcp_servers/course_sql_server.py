@@ -12,6 +12,7 @@ agent 可以核對清單有沒有漏。
     list_sections      列出同名課的所有班級（解決同名課學分不同的問題）
     get_course         用課號取得完整資訊（時間、評量項目、分類）
     check_assessment   依官方「學習評量」清單，找出有／沒有某項評量（例如期末考）的課
+    match_terms        從一句話裡找出資料庫中真實存在的課名、老師、系所（給 Router 照抄參數用）
 
 啟動（stdio）：
     pip install fastmcp
@@ -25,6 +26,7 @@ Resource
 """
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Literal, Optional
@@ -233,6 +235,40 @@ def check_assessment(
         out["courses_with_assessment_list"] = _count(conn, listed, [])
         out["basis"] = "官方『學習評量』清單；清單沒列出不代表一定沒有該項評量"
         return out
+
+
+_DEPT_SUFFIX = re.compile(r"(學士後系|學程系|學程|系)?[一二三四五六七八九甲乙丙丁戊A-Za-z0-9]*$")
+
+
+def _longest_only(names):
+    """只保留最長的比對結果：同時比對到「程式設計」和「程式設計概論」時只留後者。"""
+    names = sorted(set(names), key=len, reverse=True)
+    return [n for i, n in enumerate(names) if not any(n in m for m in names[:i])]
+
+
+@mcp.tool()
+def match_terms(text: str) -> dict:
+    """從一句話中找出資料庫裡「真實存在」的課名、老師姓名與系所名稱。
+
+    Router 填工具參數前先呼叫它，參數就能直接照抄正確名稱，避免模型把中文名稱寫錯或編造。
+
+    Args:
+        text: 使用者的問題原文。
+    """
+    with _conn() as conn:
+        courses = [r[0] for r in conn.execute(
+            "SELECT DISTINCT TRIM(couCNa) FROM courses WHERE length(TRIM(couCNa)) >= 2 AND instr(?, TRIM(couCNa)) > 0",
+            [text])]
+        teachers = [r[0] for r in conn.execute(
+            "SELECT DISTINCT tchCNa FROM courses WHERE length(tchCNa) >= 2 AND instr(?, tchCNa) > 0", [text])]
+        depts = set()
+        for (d,) in conn.execute("SELECT DISTINCT dept_class FROM outline_fields WHERE dept_class IS NOT NULL"):
+            full, stem = d.strip(), _DEPT_SUFFIX.sub("", d.strip())
+            if len(full) >= 3 and full in text:
+                depts.add(full)               # 完整班級，例如「資工一乙」
+            elif len(stem) >= 2 and stem in text:
+                depts.add(stem)               # 系所簡稱，例如「資工」
+    return {"courses": _longest_only(courses), "teachers": _longest_only(teachers), "depts": _longest_only(depts)}
 
 
 @mcp.resource("courses://catalog", mime_type="application/json")

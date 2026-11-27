@@ -112,7 +112,7 @@ The table below comes from `python src/eval_system2.py`. Ground truth is compute
 
 ### Verifier: drafts it blocks
 
-`python tests/test_system2.py` runs 24 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 24 pass. Examples:
+`python tests/test_system2.py` runs 42 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 42 pass. Examples:
 
 | Faulty draft | Verifier finding | Outcome |
 | --- | --- | --- |
@@ -122,6 +122,21 @@ The table below comes from `python src/eval_system2.py`. Ground truth is compute
 | [749446] 程式設計概論沒有期中考 | 評量清單其實有「期中考」 | Rewritten: 有期中考，佔 30% |
 | 「所有課都不用考試。」 | 全稱說法沒有資料支持（479 門中只有 143 門符合） | Blocked |
 | Recommends 資料庫管理, which the tool did not return | 回答提到「資料庫管理」，但工具結果中沒有這門課 | Blocked |
+
+### Issue found when the live LLM was connected (2026-11-27)
+
+The first LLM-mode run of `src/eval_system2.py` scored **3 of 9**. The Verifier did its job, but the Router agent's tool arguments were wrong: Llama 3.3 on Cloudflare rewrote Chinese words in its JSON output with similar-looking wrong characters.
+
+| Question | Argument the LLM produced | Correct value | Effect |
+| --- | --- | --- | --- |
+| 推薦 3 學分以上的選修課 | `req_type=选成` | 選修 | Tool found nothing → 「查無資料」 |
+| 哪些課沒有期末考？ | `keyword=期末见` | 期末考 | No course matched → claimed all 479 lack a final |
+| 程式設計概論是幾學分？ | `name=程式讨證概述` | 程式設計概論 | 「查無資料」 |
+| 吳周駿老師的課有期中考嗎？ | `teacher=和周駕` | 吳周駿 | 「查無資料」 |
+
+The second case is the dangerous one: the answer 「共 479 門」 was consistent with the tool output, so the Verifier passed it. Checking the answer against the tool is not enough when the tool was asked the wrong question.
+
+**Fix (argument grounding, `src/router_agent.py`).** The LLM still chooses the tool, but every text argument must appear in the student's own question or in the database's lists (`courses://catalog`); otherwise it is replaced by the value the rule parser extracted, or dropped. Enum arguments must be legal values. A filter whose conditions were all dropped is not run, so it cannot silently return all 479 courses. Follow-up questions keep the course ID from the previous turn instead of letting the LLM rewrite it. The Verifier was also extended: a line whose course ID is right but whose name or teacher is misspelled is blocked, and an answer that cites no course from the tool data (or says 「查無資料」 when the tool found courses) is blocked. Tests 11 and 12 in `tests/test_system2.py` replay the four garbled arguments above; all pass. The LLM-mode evaluation must be re-run to confirm the fix on the live model.
 
 **Known limits.** "No final exam" is judged from the official assessment list; an unlisted exam does not prove none exists. The Verifier recognises course names and teachers that exist in `courses.db`; a fully invented name with no course ID or checkable number would pass. The vector index still covers 47 of 479 courses, so `course-search` currently relies mostly on keywords.
 
@@ -141,7 +156,7 @@ An AI assistant helped draft this log, write the test scripts and compute the gr
 - [ ] Compare each quoted answer with `data/qa_log.jsonl`
 - [ ] Re-run `python src/demos/demo_client.py` and `python src/demos/verifier_demo.py` and confirm the counts (90, 12, 25, 192) and the 6 Verifier outcomes
 - [ ] Re-run F-01 to F-03 in hybrid mode and add the results
-- [ ] Run `python tests/test_system2.py` (24 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
+- [ ] Run `python tests/test_system2.py` (42 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
 - [ ] Rebuild the vector index for all 479 courses (`python rag_core.py build`) and re-run the evaluation
 
 | Reviewer | Date | Items checked |

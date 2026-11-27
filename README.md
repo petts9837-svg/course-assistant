@@ -29,11 +29,11 @@ Full KPI definitions: [KPI.md](KPI.md). Latest before/after results: [docs/eval_
 One question passes through four agents and two MCP servers:
 
 1. **Guard** (rules) flags prompt-injection phrases such as 「忽略之前的指示」. The question is treated as data; its instructions are never executed.
-2. **Router agent** (LLM) chooses which MCP tool to call and with what arguments, as JSON that is checked against each tool's schema. A follow-up such as 「那它幾點上課？」 reuses the course ID from the previous turn. If the LLM output is invalid, rule-based routing takes over.
+2. **Router agent** (LLM) chooses which MCP tool to call using native tool calling: the tool list it sees is the list the MCP servers declare (names, descriptions, input schemas), so a new tool needs no prompt change. Before routing, the `match_terms` tool finds the course names, teachers and departments in the question that really exist in the database, and the Router is told to copy them. Every text argument is then grounded: it must appear in the question or the database lists, or it is replaced or dropped. A follow-up such as 「那它幾點上課？」 reuses the course ID from the previous turn. If the LLM output is invalid, rule-based routing takes over.
 3. **MCP tools** return exact data:
-   - `course-sql`: `filter_courses`, `list_sections`, `get_course`, `check_assessment`, plus resources `courses://catalog` and `courses://stats`. Read-only SQL; every list comes with the exact total `count`.
+   - `course-sql`: `filter_courses`, `list_sections`, `get_course`, `check_assessment`, `match_terms`, plus resources `courses://catalog` and `courses://stats`. Read-only SQL; every list comes with the exact total `count`.
    - `course-search`: `search_courses` (BM25 + bge-m3 vectors fused by Reciprocal Rank Fusion, with a relevance threshold) and `index_status`. Results are marked as not exhaustive.
-4. **Answer agent** (LLM) writes only from the tool results, one line per course with its ID: `[課號] 課名｜老師｜學分｜…`.
+4. **Answer agent** (LLM) writes only a short summary and picks which course IDs to show; the course lines themselves (`[課號] 課名｜老師｜學分｜…`) are rendered from the tool data, so names and numbers cannot be misspelled.
 5. **Verifier agent** (rules, no LLM) checks the draft line by line against the tool results: course IDs, names and teachers must exist in the data; credits, totals and exam claims must match; sweeping claims such as 「所有課都不用考試」 must be supported. If the draft fails, the problems are sent back and the Answer agent rewrites once; if it still fails, the student gets a safe answer built directly from the tool data.
 
 Without Cloudflare credentials, the app runs in **offline mode**: rule-based routing and answers built directly from tool data, still checked by the Verifier. This is our backup for the live demo.
@@ -82,7 +82,7 @@ Other commands (run from the project root):
 
 ```bash
 python src/pipeline.py "推薦 3 學分以上的選修課"   # one question, with the full trace
-python tests/test_system2.py                        # 24 automated checks, no API key needed
+python tests/test_system2.py                        # 42 automated checks, no API key needed
 python src/eval_system2.py                          # before/after report → docs/eval_system2.md
 python src/demos/demo_client.py                     # MCP client demo
 python src/demos/verifier_demo.py                   # Verifier demo with 6 faulty drafts

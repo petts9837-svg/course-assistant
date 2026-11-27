@@ -26,6 +26,19 @@ from pathlib import Path
 import numpy as np
 import requests
 
+
+def _load_env(path=Path(__file__).resolve().parent / ".env"):
+    """讀取 .env（KEY=VALUE）；已設定的環境變數優先。System 2 用同一份 .env。"""
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env()
+
 DB_PATH = "courses.db"
 INDEX_PATH = Path("data") / "vector_index.npz"
 LOG_PATH = Path("data") / "qa_log.jsonl"

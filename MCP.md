@@ -26,8 +26,8 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
 | MCP Server：fju-sync | — | 規劃中（爬蟲 `fju_list_scraper.py`、`fju_outline_fetcher.py` 已有） |
 | MCP Client | `src/mcp_hub.py` | 已完成：stdio 啟動兩個 Server、保持連線、讀取 Resource |
 | Guard | `src/router_agent.py` | 已完成（規則式） |
-| Router agent | `src/router_agent.py` | 已完成：LLM 輸出 JSON 計畫，依工具 schema 檢查；失敗退回規則 |
-| Answer agent | `src/answer_agent.py` | 已完成：LLM 依固定格式回答；另有不用 LLM 的安全回答 |
+| Router agent | `src/router_agent.py` | 已完成：LLM 原生 tool calling（工具清單＝MCP Server 宣告的 schema），參數經 match_terms 與規則校正；失敗退回規則 |
+| Answer agent | `src/answer_agent.py` | 已完成：LLM 只寫摘要並挑課號，課程清單由工具資料產生；另有不用 LLM 的安全回答 |
 | Verifier agent | `src/verifier.py` | 已完成（規則式，逐句比對） |
 | 流程與介面 | `src/pipeline.py`、`src/app.py` | 已完成 |
 
@@ -39,6 +39,7 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
 | `list_sections` | 列出同名課的所有班級與各學分班數 |
 | `get_course` | 用課號取得時間、教室、評量項目與比例、分類 |
 | `check_assessment` | 依「學習評量」清單找出有／沒有某項評量（如期末考）的課 |
+| `match_terms` | 從問題原文找出資料庫裡真的存在的課名、老師、系所，讓 Router 照抄（防止 LLM 把中文參數寫錯字） |
 
 | Resource | 用途 |
 |---|---|

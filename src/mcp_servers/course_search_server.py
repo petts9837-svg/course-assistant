@@ -77,6 +77,8 @@ STOP_PHRASES = sorted("""有沒有 有哪些 哪些 什麼 如何 怎麼 可以 
 是 有 要 學 上""".split(), key=len, reverse=True)
 MIN_COVERAGE = float(os.environ.get("SEARCH_MIN_COVERAGE", 0.5))   # 關鍵字至少命中一半才算相關
 MIN_VECTOR_SIM = float(os.environ.get("SEARCH_MIN_SIM", 0.55))     # 向量相似度門檻（bge-m3 cosine）
+# 關鍵字完全沒命中、只靠向量撈到的課，要更像才算數：實測「量子計算」只靠向量會撈到「程式設計概論」
+MIN_VECTOR_ONLY_SIM = float(os.environ.get("SEARCH_MIN_SIM_VECTOR_ONLY", 0.65))
 
 
 def content_tokens(query):
@@ -178,12 +180,14 @@ def search_courses(query: str, k: int = 5,
     # 只保留關鍵字命中夠多的課，避免「量子計算」因為「計算」一詞撈到不相關的課
     bm_rank = [DOCS[i]["id"] for i in np.argsort(-bm)[:pool] if bm[i] > 0 and coverage(i) >= MIN_COVERAGE]
 
-    vec_rank, mode_used = [], "bm25"
+    vec_rank, mode_used, sim_of = [], "bm25", {}
     if mode in ("hybrid", "vector"):
         q = _embed_query(query)
         if q is not None:
             sims = VECTORS @ q
-            vec_rank = [VEC_IDS[i] for i in np.argsort(-sims)[:pool] if sims[i] >= MIN_VECTOR_SIM]
+            sim_of = {VEC_IDS[i]: float(sims[i]) for i in range(len(VEC_IDS))}
+            vec_rank = [VEC_IDS[i] for i in np.argsort(-sims)[:pool]
+                        if sims[i] >= (MIN_VECTOR_SIM if VEC_IDS[i] in bm_rank else MIN_VECTOR_ONLY_SIM)]
             mode_used = "hybrid" if mode == "hybrid" else "vector"
     if mode == "vector" and not vec_rank:
         mode_used = "bm25"  # 向量不可用時退回關鍵字，並在回傳中標示
@@ -202,12 +206,15 @@ def search_courses(query: str, k: int = 5,
         hits.append({"id": d["id"], "name": d["name"], "teacher": d["teacher"], "credit": d["credit"],
                      "type": d["type"], "dept": d["dept"], "schedule": d["schedule"], "score": round(score, 5),
                      "keyword_hit": sn in bm_rank,
-                     "keyword_coverage": round(coverage(POS[sn]), 2), "snippet": _snippet(d, query)})
+                     "keyword_coverage": round(coverage(POS[sn]), 2),
+                     "vector_sim": round(sim_of[sn], 3) if sn in sim_of else None,
+                     "snippet": _snippet(d, query)})
 
     out = {"query": query, "mode_used": mode_used, "returned": len(hits), "exhaustive": False,
            "courses": hits,
            "index_coverage": {"vector": len(VEC_IDS), "keyword": len(DOCS)},
-           "thresholds": {"keyword_coverage": MIN_COVERAGE, "vector_sim": MIN_VECTOR_SIM},
+           "thresholds": {"keyword_coverage": MIN_COVERAGE, "vector_sim": MIN_VECTOR_SIM,
+                          "vector_only_sim": MIN_VECTOR_ONLY_SIM},
            "basis": "依相似度排序的搜尋結果，不是完整清單"}
     if not hits:
         out["note"] = NO_DATA

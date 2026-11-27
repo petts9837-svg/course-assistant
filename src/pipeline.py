@@ -52,7 +52,15 @@ class Assistant:
             trace["steps"].append({"step": name, "t": round(time.perf_counter() - t0, 2), **info})
 
         # 1. Router（含 Guard）
-        plan = router_agent.route(question, self.hub.tools, self.catalog, self.llm, self.last_courses)
+        terms = None
+        if self.llm:
+            # MCP 工具 match_terms：找出問題中「資料庫裡真的存在」的課名、老師、系所，讓 Router 照抄
+            terms = self.hub.call("match_terms", {"text": question})
+            if terms.get("error"):
+                terms = None
+            else:
+                step("terms", **terms)
+        plan = router_agent.route(question, self.hub.tools, self.catalog, self.llm, self.last_courses, terms)
         if plan["injection"]:
             step("guard", flagged=True, note="偵測到疑似提示注入，問題中的指令部分不會被執行")
         step("router", by=plan["by"], reason=plan.get("reason", ""), calls=plan["calls"],
@@ -80,11 +88,11 @@ class Assistant:
                  summary=_summary(res))
 
         # 只找到一門課、又問細節（考試、時間…）→ 自動補查 get_course
-        if (len(evidence) == 1 and evidence[0]["tool"] in ("filter_courses", "list_sections")
-                and any(w in question for w in DETAIL_WORDS)):
-            rows = evidence[0]["result"].get("courses") or evidence[0]["result"].get("sections") or []
-            if len(rows) == 1:
-                args = {"course_id": rows[0]["id"]}
+        found = verifier.index_evidence(evidence)["courses"]
+        if (len(found) == 1 and any(w in question for w in DETAIL_WORDS)
+                and not any(ev["tool"] == "get_course" for ev in evidence)):
+            if True:
+                args = {"course_id": next(iter(found))}
                 res = self.hub.call("get_course", args)
                 evidence.append({"tool": "get_course", "args": args, "result": res})
                 step("tool", server="course-sql", tool="get_course", args=args, summary=_summary(res),

@@ -99,6 +99,14 @@ def verify(answer, evidence, catalog=None, question=""):
 
     # 2. 課號
     ids_in_text = {int(x) for x in re.findall(r"(?<!\d)(\d{6})(?!\d)", text)}
+
+    # 工具有資料，回答卻沒有引用任何一門（例如只回「查無資料」或一句空話）
+    cited = (ids_in_text & set(courses)) or any(n and n in text for n in ev_names)
+    if text.startswith(NO_DATA):
+        if not ev["search_only"]:   # 搜尋結果只是「相似」，Answer agent 判斷都不相關時可以說查無資料
+            problems.append("工具有查到資料，回答卻說查無資料")
+    elif not cited:
+        problems.append("回答沒有引用任何工具查到的課程（沒有課號或課名）")
     for cid in sorted(ids_in_text - set(courses)):
         problems.append(f"課號 {cid} 不在工具回傳的資料中（疑似編造）")
 
@@ -115,6 +123,11 @@ def verify(answer, evidence, catalog=None, question=""):
         if len(ids) != 1 or ids[0] not in courses:
             continue
         c = courses[ids[0]]
+        # 課號對了但課名／老師寫錯字（實測 LLM 會把中文寫成相近的錯字，例如「吳周駿」→「和周駕」）
+        if c.get("name") and c["name"].strip() not in line:
+            problems.append(f"課號 {ids[0]} 的課名應為「{c['name'].strip()}」，回答寫的不一致")
+        if line.count("｜") >= 2 and c.get("teacher") and c["teacher"].strip() not in line:
+            problems.append(f"{c['name']}（{ids[0]}）的老師應為「{c['teacher'].strip()}」，回答沒有寫對")
         m = re.search(r"(\d+(?:\.\d+)?)\s*學分", line)
         if m and c.get("credit") is not None and float(m.group(1)) != float(c["credit"]):
             problems.append(f"{c['name']}（{ids[0]}）學分應為 {float(c['credit']):g}，回答寫 {m.group(1)}")

@@ -39,8 +39,8 @@ class CloudflareLLM:
         self.headers = {"Authorization": f"Bearer {token}"}
         self.model = model
 
-    def chat(self, messages, max_tokens=1024, temperature=0.1, retries=3):
-        payload = {"messages": messages, "max_tokens": max_tokens, "temperature": temperature}
+    def run(self, payload, retries=3):
+        """送出一次請求，回傳 Workers AI 的原始 result（可能含 response 或 tool_calls）。"""
         for attempt in range(retries):
             resp = requests.post(self.url, json=payload, headers=self.headers, timeout=120)
             if resp.status_code == 429 and attempt < retries - 1:
@@ -48,13 +48,46 @@ class CloudflareLLM:
                 continue
             if not resp.ok:
                 raise RuntimeError(f"Cloudflare API 錯誤 {resp.status_code}: {resp.text[:300]}")
-            result = resp.json()["result"]
-            if isinstance(result, dict) and "response" in result:
-                out = result["response"]
-                return out if isinstance(out, str) else json.dumps(out, ensure_ascii=False)
-            if isinstance(result, dict) and "choices" in result:
-                return result["choices"][0]["message"]["content"]
-            return str(result)
+            return resp.json()["result"]
+
+    def chat(self, messages, max_tokens=1024, temperature=0.1):
+        return text_of(self.run({"messages": messages, "max_tokens": max_tokens, "temperature": temperature}))
+
+    def tool_call(self, messages, tools, max_tokens=300):
+        """原生 tool calling：把 MCP 工具的 schema 交給模型，回傳 (tool_calls, 文字回覆)。"""
+        result = self.run({"messages": messages, "tools": tools, "temperature": 0, "max_tokens": max_tokens})
+        return tool_calls_of(result), text_of(result)
+
+
+def text_of(result):
+    if isinstance(result, dict):
+        out = result.get("response")
+        if isinstance(out, str):
+            return out
+        if out is not None:
+            return json.dumps(out, ensure_ascii=False)
+        if result.get("choices"):
+            return result["choices"][0]["message"].get("content") or ""
+        return ""
+    return str(result)
+
+
+def tool_calls_of(result):
+    """相容 Workers AI 的 result.tool_calls 與 OpenAI 相容格式 choices[0].message.tool_calls。"""
+    calls = []
+    raw = (result or {}).get("tool_calls") if isinstance(result, dict) else None
+    if raw is None and isinstance(result, dict) and result.get("choices"):
+        raw = result["choices"][0]["message"].get("tool_calls")
+    for c in raw or []:
+        fn = c.get("function", c)
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except json.JSONDecodeError:
+                args = {}
+        calls.append({"tool": fn.get("name"), "args": args or {}})
+    return calls
 
 
 def get_llm():
