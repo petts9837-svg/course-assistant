@@ -26,6 +26,7 @@ ANSWER_PROMPT = """你是輔仁大學選課助理的 Answer agent。只能根據
 5. 若工具資料有 basis 欄位，summary 最後一句照實說明判斷依據。
 6. 單一課程（found=true）：直接回答使用者問的事（例如評量、上課時間），數字照抄資料。
 7. show_ids 最多 {max_list} 個，挑最符合問題的課號；單一課程時放那一門的課號。
+8. 寫給學生看：不要提到工具名稱、欄位名稱或 JSON（例如 filter_courses、schedules、credits 欄位）。
 {feedback}
 只輸出一個 JSON 物件，不要其他文字：
 {{"summary": "1 到 3 句話", "show_ids": [課號, ...]}}"""
