@@ -74,18 +74,41 @@ def _tokens(text):
 # 也避免「跟人工智慧有關的課」切出「慧有」「關的」這種跨詞的 bigram
 STOP_PHRASES = sorted("""有沒有 有哪些 哪些 什麼 如何 怎麼 可以 推薦 一下 我想 想要 想學 想修 請問 課程 的課 課 相關
 有關 關於 學習 一些 幫我 給我 告訴我 嗎 呢 吧 今天 明天 現在 時候 輔大 輔仁 有開 開的 開設 跟 和 與 的 我 你
-是 有 要 學 上""".split(), key=len, reverse=True)
+是 有 要 學 上 需要 需要做 會教 有教 在教 教的 教什麼 做 修 開發 入門""".split(), key=len, reverse=True)
 MIN_COVERAGE = float(os.environ.get("SEARCH_MIN_COVERAGE", 0.5))   # 關鍵字至少命中一半才算相關
 MIN_VECTOR_SIM = float(os.environ.get("SEARCH_MIN_SIM", 0.55))     # 向量相似度門檻（bge-m3 cosine）
 # 關鍵字完全沒命中、只靠向量撈到的課，要更像才算數：實測「量子計算」只靠向量會撈到「程式設計概論」
 MIN_VECTOR_ONLY_SIM = float(os.environ.get("SEARCH_MIN_SIM_VECTOR_ONLY", 0.65))
 
 
-def content_tokens(query):
+def _strip(query):
     q = query.lower()
     for w in STOP_PHRASES:
         q = q.replace(w, " ")
-    return set(_tokens(q))
+    # 「C 語言」「App 開發」：英文和中文之間的空白拿掉，才能整段比對「c語言」
+    q = re.sub(r"(?<=[a-z0-9+#])\s+(?=[一-鿿])|(?<=[一-鿿])\s+(?=[a-z0-9])", "", q)
+    q = re.sub(r"(^|\s)教(?=[一-鿿a-z])", " ", q)      # 「有沒有教演算法」→「演算法」
+    return q
+
+
+def content_tokens(query):
+    return set(_tokens(_strip(query)))
+
+
+def content_phrases(query):
+    """問題裡的完整關鍵詞（去掉問句用語後連在一起的一段），例如「c語言」「資料分析」「專題」。"""
+    return [p for p in re.split(r"[\s，。？！?!,、：:；;「」『』（）()]+", _strip(query)) if len(p) >= 2]
+
+
+def _parts(phrase):
+    """「手機app」→ ["手機", "app"]：中英文交界拆開，英文要整個字比對。"""
+    return [p for p in re.findall(r"[a-z0-9+#]+|[一-鿿]+", phrase) if len(p) >= 2 or p.isascii()]
+
+
+def _part_in(part, text):
+    if part.isascii():
+        return re.search(r"(?<![a-z])" + re.escape(part) + r"(?![a-z])", text) is not None
+    return part in text
 
 
 class BM25:
@@ -111,6 +134,7 @@ class BM25:
 
 
 DOCS = _load_docs()
+DOC_LOWER = [(d["name"] + " " + re.sub(r"\s+", "", d["text"])).lower() for d in DOCS]
 BM = BM25([d["name"] + " " + d["text"] for d in DOCS])
 POS = {d["id"]: i for i, d in enumerate(DOCS)}
 
@@ -177,8 +201,27 @@ def search_courses(query: str, k: int = 5,
     def coverage(i):
         return sum(1 for t in terms if t in BM.docs[i]) / len(terms)
 
-    # 只保留關鍵字命中夠多的課，避免「量子計算」因為「計算」一詞撈到不相關的課
-    bm_rank = [DOCS[i]["id"] for i in np.argsort(-bm)[:pool] if bm[i] > 0 and coverage(i) >= MIN_COVERAGE]
+    phrases = content_phrases(query)
+
+    def phrase_hits(i):
+        name = DOCS[i]["name"].lower()
+        return (sum(p in name for p in phrases), sum(p in DOC_LOWER[i] for p in phrases))
+
+    # 完整關鍵詞出現在課名 > 出現在大綱 > BM25 分數；
+    # 沒有完整關鍵詞時，bigram 至少命中一半才算相關（避免「量子計算」因為「計算」撈到不相關的課）
+    # 很短的關鍵詞（≤ 3 個 bigram，例如「區塊鏈」「量子計算」）只看完整比對：
+    # 半個詞（「區塊」「計算」）命中太容易，實測會撈到只在參考書目提到的課
+    short = len(terms) <= 3
+
+    def whole_word(i):
+        # 拆開比對只用在英文部分至少 2 個字母時（「手機app」可以；「c語言」的「c」太常見，必須整段出現）
+        return any(p in DOC_LOWER[i] or (all(len(x) >= 2 for x in _parts(p))
+                                          and all(_part_in(x, DOC_LOWER[i]) for x in _parts(p))) for p in phrases)
+
+    cand = [i for i in range(len(DOCS)) if bm[i] > 0
+            and (whole_word(i) if short else (any(phrase_hits(i)) or coverage(i) >= MIN_COVERAGE))]
+    cand.sort(key=lambda i: (phrase_hits(i), bm[i]), reverse=True)
+    bm_rank = [DOCS[i]["id"] for i in cand[:pool]]
 
     vec_rank, mode_used, sim_of = [], "bm25", {}
     if mode in ("hybrid", "vector"):
@@ -186,8 +229,11 @@ def search_courses(query: str, k: int = 5,
         if q is not None:
             sims = VECTORS @ q
             sim_of = {VEC_IDS[i]: float(sims[i]) for i in range(len(VEC_IDS))}
+            in_kw = set(bm_rank)
+            # 短關鍵詞（「區塊鏈」「天文學」）在大綱裡完全沒出現 → 不讓向量「找相似」來湊答案
             vec_rank = [VEC_IDS[i] for i in np.argsort(-sims)[:pool]
-                        if sims[i] >= (MIN_VECTOR_SIM if VEC_IDS[i] in bm_rank else MIN_VECTOR_ONLY_SIM)]
+                        if (VEC_IDS[i] in in_kw and sims[i] >= MIN_VECTOR_SIM)
+                        or (VEC_IDS[i] not in in_kw and not short and sims[i] >= MIN_VECTOR_ONLY_SIM)]
             mode_used = "hybrid" if mode == "hybrid" else "vector"
     if mode == "vector" and not vec_rank:
         mode_used = "bm25"  # 向量不可用時退回關鍵字，並在回傳中標示
@@ -207,6 +253,7 @@ def search_courses(query: str, k: int = 5,
                      "type": d["type"], "dept": d["dept"], "schedule": d["schedule"], "score": round(score, 5),
                      "keyword_hit": sn in bm_rank,
                      "keyword_coverage": round(coverage(POS[sn]), 2),
+                     "phrase_in_name": phrase_hits(POS[sn])[0] > 0, "phrase_in_outline": phrase_hits(POS[sn])[1] > 0,
                      "vector_sim": round(sim_of[sn], 3) if sn in sim_of else None,
                      "snippet": _snippet(d, query)})
 

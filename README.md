@@ -26,17 +26,18 @@ Full KPI definitions: [KPI.md](KPI.md). Latest before/after results: [docs/eval_
 
 ## How System 2 works
 
-One question passes through four agents and two MCP servers:
+One question passes through four agents and three MCP servers:
 
 1. **Guard** (rules) flags prompt-injection phrases such as 「忽略之前的指示」. The question is treated as data; its instructions are never executed.
-2. **Router agent** (LLM) chooses which MCP tool to call using native tool calling: the tool list it sees is the list the MCP servers declare (names, descriptions, input schemas), so a new tool needs no prompt change. Before routing, the `match_terms` tool finds the course names, teachers and departments in the question that really exist in the database, and the Router is told to copy them. Every text argument is then grounded: it must appear in the question or the database lists, or it is replaced or dropped. A follow-up such as 「那它幾點上課？」 reuses the course ID from the previous turn. If the LLM output is invalid, rule-based routing takes over.
+2. **Router agent** (LLM) chooses which MCP tool to call using native tool calling: the tool list it sees is the list the MCP servers declare (names, descriptions, input schemas), so a new tool needs no prompt change. Before routing, the `match_terms` tool finds the course names, teachers and departments in the question that really exist in the database, and the Router is told to copy them. Every text argument is then grounded: it must appear in the question or the database lists, or it is replaced or dropped. A follow-up such as 「那它幾點上課？」 reuses the course ID from the previous turn; if the previous answer listed several courses, the assistant asks which one, and the student can answer with a course ID, a teacher, a class (「資工一乙那班」) or 「第 2 門」. If the LLM output is invalid, rule-based routing takes over.
 3. **MCP tools** return exact data:
    - `course-sql`: `filter_courses`, `list_sections`, `get_course`, `check_assessment`, `match_terms`, plus resources `courses://catalog` and `courses://stats`. Read-only SQL; every list comes with the exact total `count`.
-   - `course-search`: `search_courses` (BM25 + bge-m3 vectors fused by Reciprocal Rank Fusion, with a relevance threshold) and `index_status`. Results are marked as not exhaustive.
+   - `course-search`: `search_courses` (BM25 + bge-m3 vectors fused by Reciprocal Rank Fusion) and `index_status`. A short topic such as 「區塊鏈」 must appear as a whole word in an outline; vector-only matches need a higher similarity. Results are marked as not exhaustive.
+   - `fju-sync`: `sync_status`, `check_outline_updates`, `refresh_course`. Keeps the data honest: compares a course with the live FJU outline system and, only with `confirm=true`, writes the new version. These tools are hidden from the Router, so a student's question never triggers a write; they are used from the app's 「資料同步」 panel.
 4. **Answer agent** (LLM) writes only a short summary and picks which course IDs to show; the course lines themselves (`[課號] 課名｜老師｜學分｜…`) are rendered from the tool data, so names and numbers cannot be misspelled.
 5. **Verifier agent** (rules, no LLM) checks the draft line by line against the tool results: course IDs, names and teachers must exist in the data; credits, totals and exam claims must match; sweeping claims such as 「所有課都不用考試」 must be supported. If the draft fails, the problems are sent back and the Answer agent rewrites once; if it still fails, the student gets a safe answer built directly from the tool data.
 
-Without Cloudflare credentials, the app runs in **offline mode**: rule-based routing and answers built directly from tool data, still checked by the Verifier. This is our backup for the live demo.
+Without Cloudflare credentials, or when the LLM fails (for example the free daily quota is used up, which happened during our own testing), the app switches to **offline mode** automatically: rule-based routing and answers built directly from tool data, still checked by the Verifier. The LLM is paused for 10 minutes and the app shows why, so a live demo keeps working instead of crashing.
 
 ## Repository layout
 
@@ -49,10 +50,13 @@ src/
   verifier.py                Verifier agent (rule-based)
   mcp_hub.py                 MCP client: launches servers over stdio, keeps sessions open
   llm.py                     Cloudflare Workers AI wrapper, .env loader
-  eval_system2.py            System 1 vs System 2 evaluation against independent SQL
+  eval_system2.py            System 1 vs System 2 on the midterm failure cases (independent SQL)
+  benchmark_system2.py       Full pipeline on the 33 midterm benchmark questions + 5 off-topic ones
+  tune_search.py             Calibrates the vector-similarity threshold of course-search
   mcp_servers/
     course_sql_server.py     MCP server: exact SQL tools + resources
     course_search_server.py  MCP server: hybrid keyword + vector search
+    fju_sync_server.py       MCP server: data freshness (compare with / refresh from the outline site)
   demos/                     Command-line demos (MCP client, Verifier)
 tests/test_system2.py        Automated tests with a fake LLM (no API key needed)
 docs/                        Architecture diagram (PNG + HTML source), evaluation report
@@ -82,22 +86,24 @@ Other commands (run from the project root):
 
 ```bash
 python src/pipeline.py "推薦 3 學分以上的選修課"   # one question, with the full trace
-python tests/test_system2.py                        # 45 automated checks, no API key needed
+python tests/test_system2.py                        # 64 automated checks, no API key needed
 python src/eval_system2.py                          # before/after report → docs/eval_system2.md
+python src/benchmark_system2.py                     # 38-question benchmark → docs/benchmark_system2.md
+python src/tune_search.py                           # vector threshold calibration (needs API key)
 python src/demos/demo_client.py                     # MCP client demo
 python src/demos/verifier_demo.py                   # Verifier demo with 6 faulty drafts
 python rag_core.py build                            # rebuild the vector index (needs API key)
 streamlit run app.py                                # System 1, for comparison
 ```
 
-To use the MCP servers from another MCP client (for example Claude Desktop), point it at `python src/mcp_servers/course_sql_server.py` or `python src/mcp_servers/course_search_server.py` (stdio transport).
+To use the MCP servers from another MCP client (for example Claude Desktop), point it at `python src/mcp_servers/course_sql_server.py`, `course_search_server.py` or `fju_sync_server.py` (stdio transport).
 
 ## Known limits
 
-- The vector index currently covers 47 of 479 courses; run `python rag_core.py build` with an API key to rebuild it for all courses. Until then `course-search` relies mostly on BM25 keywords.
 - 「沒有期末考」 is judged from the official 學習評量 list; an exam that is not listed is not proof that none exists. The tools state this basis in every answer.
-- The Verifier recognises course names and teachers that exist in `courses.db`; an invented name that matches nothing in the database is caught only if it comes with a course ID or a number that can be checked.
-- `fju-sync` (refreshing data from the outline site as an MCP server) is planned; the scrapers already exist.
+- The Verifier checks facts it can compare with data: course IDs, names, teachers, credits, totals, weekdays, assessment items and quoted names. A wrong claim that uses none of these (for example a made-up description of a course's content) is not caught.
+- Topic search is judged against keyword lists we wrote by hand; relevance for open questions such as 「我想學網頁開發」 is approximate.
+- After `refresh_course` writes new data, the vector index is out of date until `python rag_core.py build` is run; `sync_status` reports this.
 
 ## Team contribution
 

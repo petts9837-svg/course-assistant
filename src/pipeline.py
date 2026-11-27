@@ -13,6 +13,7 @@ pipeline.py：System 2 的完整流程（Multi-Agent + MCP）
 """
 
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -29,17 +30,56 @@ LOG_PATH = ROOT / "data" / "qa_log_system2.jsonl"
 DETAIL_WORDS = ["考", "評分", "評量", "成績", "時間", "星期幾", "幾點", "教室", "上課", "報告", "作業"]
 
 
+class GuardedLLM:
+    """包住 LLM：呼叫失敗（每日額度用完、網路斷線）時記下原因並暫停一段時間，
+    暫停期間整個系統自動改用離線規則模式，而不是讓現場 demo 當掉。"""
+
+    def __init__(self, llm):
+        self.inner, self.model = llm, llm.model
+        self.paused_until, self.last_error = 0.0, None
+        self.supports_tools = hasattr(llm, "tool_call")
+
+    @property
+    def available(self):
+        return time.time() >= self.paused_until
+
+    def _guard(self, fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except Exception as e:
+            msg = str(e)
+            quota = "429" in msg or "allocation" in msg or "neurons" in msg
+            self.last_error = "每日免費額度用完" if quota else f"LLM 無法使用：{msg[:80]}"
+            self.paused_until = time.time() + (600 if quota else 60)
+            raise
+
+    def chat(self, *a, **kw):
+        return self._guard(self.inner.chat, *a, **kw)
+
+    def tool_call(self, *a, **kw):
+        return self._guard(self.inner.tool_call, *a, **kw)
+
+
 class Assistant:
     def __init__(self, hub=None, llm="auto", log=True):
         self.hub = hub or MCPHub()
-        self.llm = get_llm() if llm == "auto" else llm
+        raw = get_llm() if llm == "auto" else llm
+        self.llm = GuardedLLM(raw) if raw is not None and not isinstance(raw, GuardedLLM) else raw
         self.catalog = self.hub.read_resource("courses://catalog")
         self.last_courses = []  # 上一輪回答中出現的課，給追問用
         self.log = log
 
     @property
     def mode(self):
-        return f"LLM（{self.llm.model}）" if self.llm else "離線規則模式（未設定 Cloudflare 憑證）"
+        if not self.llm:
+            return "離線規則模式（未設定 Cloudflare 憑證）"
+        if not self.llm.available:
+            return f"離線規則模式（LLM 暫停：{self.llm.last_error}）"
+        return f"LLM（{self.llm.model}）"
+
+    @property
+    def active_llm(self):
+        return self.llm if self.llm and self.llm.available else None
 
     def reset(self):
         self.last_courses = []
@@ -53,14 +93,15 @@ class Assistant:
 
         # 1. Router（含 Guard）
         terms = None
-        if self.llm:
+        llm = self.active_llm
+        if llm:
             # MCP 工具 match_terms：找出問題中「資料庫裡真的存在」的課名、老師、系所，讓 Router 照抄
             terms = self.hub.call("match_terms", {"text": question})
             if terms.get("error"):
                 terms = None
             else:
                 step("terms", **terms)
-        plan = router_agent.route(question, self.hub.tools, self.catalog, self.llm, self.last_courses, terms)
+        plan = router_agent.route(question, self.hub.tools, self.catalog, llm, self.last_courses, terms)
         if plan["injection"]:
             step("guard", flagged=True, note="偵測到疑似提示注入，問題中的指令部分不會被執行")
         step("router", by=plan["by"], reason=plan.get("reason", ""), calls=plan["calls"],
@@ -69,7 +110,7 @@ class Assistant:
         # 追問對象不明確：不猜，請使用者指定（回答不含任何課程資料，不需查核）
         if plan.get("clarify"):
             final = (f"上一輪列出了 {plan['clarify']} 門課，請告訴我是哪一門"
-                     "（例如課號或開課班級），我再幫你查。")
+                     "（例如課號、老師、開課班級，或「第 2 門」），我再幫你查。")
             trace.update(answer=final, verified=True, attempts=[], evidence=[], router_by=plan["by"],
                          injection=bool(plan["injection"]), mode=self.mode,
                          latency_s=round(time.perf_counter() - t0, 2))
@@ -100,10 +141,18 @@ class Assistant:
 
         # 3. Answer agent → 4. Verifier（最多重寫一次）
         attempts = []
-        if self.llm:
+        llm = self.active_llm      # Router 失敗時可能剛被暫停
+        if llm:
             feedback = None
             for i in range(2):
-                draft = answer_agent.write_with_llm(self.llm, question, evidence, feedback)
+                try:
+                    draft = answer_agent.write_with_llm(llm, question, evidence, feedback)
+                except Exception:
+                    draft = answer_agent.compose_safe(question, evidence)
+                    v = verifier.verify(draft, evidence, self.catalog, question)
+                    attempts.append({"draft": draft, "verdict": v})
+                    step("fallback", note=f"{self.llm.last_error} → 改用工具資料直接產生的回答", ok=v["ok"])
+                    break
                 v = verifier.verify(draft, evidence, self.catalog, question)
                 attempts.append({"draft": draft, "verdict": v})
                 step("answer", attempt=i + 1, by="llm")
@@ -129,11 +178,15 @@ class Assistant:
             final = "（問題中要求改變規則的指令已忽略，以下只依課程資料回答）\n" + final
 
         # 記住這一輪的課，給下一輪追問
+        # 依回答中出現的順序記住（「第 2 門」要對到學生看到的第 2 門）
         courses = verifier.index_evidence(evidence)["courses"]
         if courses:
-            self.last_courses = [{"id": c["id"], "name": c.get("name"), "teacher": c.get("teacher")}
-                                 for c in courses.values()]
+            shown = [int(x) for x in re.findall(r"\[(\d{6})\]", final) if int(x) in courses]
+            order = list(dict.fromkeys(shown)) or list(courses)
+            self.last_courses = [{"id": i, "name": courses[i].get("name"), "teacher": courses[i].get("teacher"),
+                                  "dept": courses[i].get("dept")} for i in order]
 
+        trace["llm_error"] = self.llm.last_error if self.llm and not self.llm.available else None
         trace.update(answer=final, verified=v["ok"], attempts=attempts, evidence=evidence,
                      router_by=plan["by"], injection=bool(plan["injection"]),
                      latency_s=round(time.perf_counter() - t0, 2), mode=self.mode)

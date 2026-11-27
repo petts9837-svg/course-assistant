@@ -212,6 +212,77 @@ v = verifier.verify("程式設計(一) 在星期一和星期四上課。\n- [743
 check("正確星期通過", v["ok"], v["problems"])
 check("解析「星期一、五」", verifier.weekdays_in("星期一、五上課") == {1, 5})
 
+print("16. 上一輪有多門課 → 學生指定其中一門")
+for pick, expect in [("資工一乙那班", 743463), ("743446 那門", 743446), ("第 2 門", None), ("王國華老師的", 743463)]:
+    a = Assistant(hub=hub, llm=None, log=False)
+    first = a.ask("程式設計(一)有哪些班？")
+    shown = [int(x) for x in __import__("re").findall(r"\[(\d{6})\]", first["answer"])]
+    tr = a.ask(pick)
+    want = expect or shown[1]
+    got = tr["evidence"][0]["args"].get("course_id") if tr["evidence"] else None
+    check(f"「{pick}」→ {want}", got == want and tr["verified"], (got, tr["answer"][:60]))
+a = Assistant(hub=hub, llm=None, log=False)
+a.ask("程式設計(一)有哪些班？")
+tr = a.ask("那它幾學分")
+check("沒指定 → 請學生選", "第 2 門" in tr["answer"])
+tr = a.ask("資工系還有什麼課")
+check("新問題不會被當成選課", not tr["evidence"] or tr["evidence"][0]["tool"] != "get_course", tr["evidence"][:1])
+
+print("17. fju-sync：比對官網與資料庫（用資料庫裡存的原始 JSON 模擬官網回應，不連網）")
+import os, shutil, sqlite3, tempfile                       # noqa: E401
+tmp = Path(tempfile.mkdtemp()) / "courses.db"
+shutil.copy(Path(__file__).resolve().parents[1] / "courses.db", tmp)
+os.environ["COURSES_DB"] = str(tmp)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src" / "mcp_servers"))
+import fju_sync_server as fs                               # noqa: E402
+raw = {ep: json.loads(js) for ep, js in sqlite3.connect(tmp).execute(
+    "SELECT endpoint, json FROM outline_raw WHERE jonCouSn = 749446")}
+fs.DB_PATH, fs.fetcher.SLEEP_SECONDS = tmp, 0
+fs.fetcher.fetch_endpoint = lambda ep, sn, tch, needs: raw[ep]
+check("官網沒變 → changed=False", fs.check_outline_updates(749446)["changed"] is False)
+for g in raw["CourseMethods"]["result"]:
+    for m in g.get("methodsDetails") or []:
+        if m.get("methodName") == "期中考":
+            m["percent"] = 40
+r = fs.check_outline_updates(749446)
+check("老師改了期中考比例 → changed=True", r["changed"] and "期中考 40%" in r["assessment_now"], r)
+check("沒有 confirm 不寫入", fs.refresh_course(749446)["written"] is False)
+r = fs.refresh_course(749446, confirm=True)
+check("confirm 後寫入", r["written"] and "期中考 40%" in r["assessment_now"])
+check("寫入後與官網一致", fs.check_outline_updates(749446)["changed"] is False)
+check("不存在的課號 → 查無資料", fs.check_outline_updates(1)["found"] is False)
+check("Router 看不到 fju-sync 工具", "refresh_course" not in [t["name"] for t in
+      __import__("router_agent").tool_specs(hub.tools)])
+
+print("18. 引用資料庫沒有的課名")
+ev = [{"tool": "list_sections", "args": {}, "result": hub.call("list_sections", {"name": "程式設計概論"})}]
+v = verifier.verify("共 9 門，也可以考慮「資料結構與演算法」。\n- [741436] 程式設計概論｜許經典｜2 學分", ev, catalog, "程式設計概論")
+check("攔下不存在的「資料結構與演算法」", not v["ok"] and any("資料結構與演算法" in p for p in v["problems"]), v["problems"])
+v = verifier.verify("共 9 門「程式設計概論」。\n- [741436] 程式設計概論｜許經典｜2 學分", ev, catalog, "程式設計概論")
+check("引用真的課名通過", v["ok"], v["problems"])
+
+print("19. LLM 每日額度用完（2026-11-27 實測 429）→ 不當掉，改用離線規則")
+
+
+class QuotaLLM(CloudflareLLM):
+    def __init__(self):
+        self.model, self.calls = "quota-llm", 0
+
+    def run(self, payload, retries=3):
+        self.calls += 1
+        raise RuntimeError('Cloudflare API 錯誤 429: {"errors":[{"message":"you have used up your daily free allocation of 10,000 neurons"}]}')
+
+
+ql = QuotaLLM()
+a = Assistant(hub=hub, llm=ql, log=False)
+tr = a.ask("推薦 3 學分以上的選修課")
+check("額度用完仍回答正確", tr["answer"].startswith("共 90 門") and tr["verified"], tr["answer"][:40])
+check("回報原因", tr.get("llm_error") == "每日免費額度用完", tr.get("llm_error"))
+n = ql.calls
+tr = a.ask("程式設計概論是幾學分？")
+check("暫停期間不再呼叫 LLM（不拖慢回答）", ql.calls == n and "學分分布" in tr["answer"])
+check("介面顯示離線模式", "LLM 暫停" in a.mode, a.mode)
+
 print(f"\n通過 {passed}，失敗 {failed}")
 hub.close()
 sys.exit(1 if failed else 0)

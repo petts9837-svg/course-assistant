@@ -62,7 +62,7 @@
 <div class="box teal" style="left:1060px; top:240px; width:340px; height:190px;">
   <h3>MCP Client<span class="tag t-built">BUILT</span></h3>
   <p class="mono">src/mcp_hub.py</p>
-  <p>Launches both servers, keeps sessions open, reads resources</p>
+  <p>Launches all three servers, keeps sessions open, reads resources</p>
 </div>
 
 <!-- orchestrator: bottom row (right to left) -->
@@ -74,7 +74,7 @@
   <h3>Verifier agent<span class="tag t-rule">RULES</span></h3>
   <ul>
     <li>IDs, names, teachers are in the tool data</li>
-    <li>Credits, totals, exams match</li>
+    <li>Credits, totals, exams, weekdays match</li>
     <li>No unsupported “all courses…”</li>
   </ul>
 </div>
@@ -95,9 +95,10 @@
   <p class="mono">search_courses · index_status</p>
   <p style="margin-top:8px">BM25 + bge-m3 vectors fused by RRF; relevance threshold; results marked “not exhaustive”</p>
 </div>
-<div class="box planned" style="left:1500px; top:900px; width:450px; height:170px;">
-  <h3>fju-sync<span class="tag t-plan">PLANNED</span></h3>
-  <p>Refresh courses.db from the outline site (scrapers already exist)</p>
+<div class="box teal" style="left:1500px; top:895px; width:450px; height:180px;">
+  <h3>fju-sync<span class="tag t-built">BUILT</span></h3>
+  <p class="mono" style="font-size:16px">sync_status · check_outline_updates<br>refresh_course</p>
+  <p>Checks the live site; writes only with confirm=true</p>
 </div>
 
 <!-- data -->
@@ -110,7 +111,7 @@
   <p class="mono">data/vector_index.npz</p>
   <p>bge-m3 embeddings</p>
 </div>
-<div class="box planned" style="left:2030px; top:900px; width:310px; height:170px;">
+<div class="box" style="left:2030px; top:900px; width:310px; height:170px;">
   <h3>outline.fju.edu.tw</h3>
   <p>Official course outline site</p>
 </div>
@@ -146,12 +147,12 @@
     <!-- Client → servers -->
     <path d="M1400,300 L1498,300" stroke="#136B66" marker-end="url(#t)"/>
     <path d="M1400,365 L1450,365 L1450,700 L1498,700" stroke="#136B66" marker-end="url(#t)"/>
-    <path d="M1400,405 L1462,405 L1462,985 L1498,985" stroke="#8A9099" stroke-dasharray="12 8" marker-end="url(#g)"/>
+    <path d="M1400,405 L1462,405 L1462,985 L1498,985" stroke="#136B66" marker-end="url(#t)"/>
     <!-- servers → data -->
     <path d="M1950,330 L2028,330" stroke="#14213D" marker-end="url(#a)"/>
     <path d="M1950,640 L1988,640 L1988,390 L2028,390" stroke="#14213D" marker-end="url(#a)"/>
     <path d="M1950,725 L2028,725" stroke="#14213D" marker-end="url(#a)"/>
-    <path d="M1950,985 L2028,985" stroke="#8A9099" stroke-dasharray="12 8" marker-end="url(#g)"/>
+    <path d="M1950,985 L2028,985" stroke="#14213D" marker-end="url(#a)"/>
     <!-- LLM calls -->
     <path d="M900,1030 L900,1200 L2028,1200" stroke="#C2410C" stroke-width="3" stroke-dasharray="10 8" marker-end="url(#o)"/>
   </g>
@@ -166,5 +167,5 @@
   </g>
 </svg>
 
-<div class="legend">Teal border = built and tested · dashed grey = planned · <b style="color:#C2410C">LLM</b> = language-model agent · <b style="color:#136B66">RULES</b> = deterministic (same input → same verdict) · no API key → rules replace the LLM agents (offline mode)</div>
+<div class="legend">Teal border = MCP component, built and tested · <b style="color:#C2410C">LLM</b> = language-model agent · <b style="color:#136B66">RULES</b> = deterministic (same input → same verdict) · no API key → rules replace the LLM agents (offline mode)</div>
 </body></html>

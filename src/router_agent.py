@@ -42,9 +42,51 @@ def _norm(q):
     return q.translate(str.maketrans("０１２３４５６７８９", "0123456789")).strip()
 
 
-def rule_route(question, catalog, last_ids=()):
+CN_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+NEW_TOPIC_WORDS = ["還有", "其他", "別的", "全部", "所有", "哪些", "什麼", "有哪", "有沒有", "推薦"]
+
+
+def pick_from_last(question, last_courses):
+    """上一輪列出好幾門課時，學生用課號、老師、班級或「第 N 門」指定其中一門 → 回傳那門課，否則 None。"""
+    if len(last_courses) < 2:
+        return None
+    q = _norm(question)
+    by_id = [c for c in last_courses if str(c["id"]) in q]
+    if len(by_id) == 1:
+        return by_id[0]
+    m = re.search(r"第\s*([一二三四五六七八九十]|\d+)\s*(?:門|個|班|堂|筆|項)", q)
+    if m:
+        n = int(m.group(1)) if m.group(1).isdigit() else CN_NUM[m.group(1)]
+        return last_courses[n - 1] if 1 <= n <= len(last_courses) else None
+    if any(w in q for w in NEW_TOPIC_WORDS):
+        return None
+    if len(q) > 16 and not any(w in q for w in FOLLOWUP_WORDS + ["那班", "那位", "那堂"]):
+        return None                       # 長句通常是新問題，不當成「選一門」
+    cands = list(last_courses)
+    narrowed = False
+    for key in ("teacher", "dept"):
+        hit = [c for c in cands if c.get(key) and c[key] in q]            # 完整比對優先（「資工一乙」）
+        if not hit and key == "dept":
+            hit = [c for c in cands if c.get(key) and _dept_in(c[key], q)]  # 再試簡稱（「資工」）
+        if hit and len(hit) < len(cands):
+            cands, narrowed = hit, True
+    return cands[0] if narrowed and len(cands) == 1 else None
+
+
+def _dept_in(dept, q):
+    """「資工一乙那班」對到開課班級「資工一乙」；只寫「資工」時可能對到好幾班。"""
+    return any(len(dept[:k]) >= 2 and dept[:k] in q for k in range(len(dept), 1, -1)) and dept[:2] in q
+
+
+def rule_route(question, catalog, last_ids=(), last_courses=()):
     q = _norm(question)
     calls = []
+
+    # 上一輪有好幾門課，學生這一輪指定其中一門（課號、老師、班級、第 N 門）
+    picked = pick_from_last(question, list(last_courses))
+    if picked:
+        return {"calls": [{"tool": "get_course", "args": {"course_id": int(picked["id"])}}],
+                "reason": f"從上一輪列出的課中選定 [{picked['id']}] {picked.get('name', '')}"}
 
     # 追問：用上一輪的課號；上一輪有好幾門課時，不猜，請使用者指定
     if last_ids and (any(w in q for w in FOLLOWUP_WORDS) or (q.startswith("那") and len(q) <= 14)):
@@ -78,9 +120,9 @@ def rule_route(question, catalog, last_ids=()):
             args["credit_max"] = v
         else:
             args["credit_min"] = args["credit_max"] = v
-    for t in ["必修", "選修", "通識"]:
-        if t in q:
-            args["req_type"] = t
+    types = [t for t in ["必修", "選修", "通識"] if t in q]
+    if len(types) == 1 and "還是" not in q:      # 「是必修還是選修？」是在問，不是條件
+        args["req_type"] = types[0]
     m = re.search(r"(?:星期|週|周|禮拜)([一二三四五六日天1-7])", q)
     if m:
         d = m.group(1)
@@ -93,6 +135,10 @@ def rule_route(question, catalog, last_ids=()):
         args["programming"] = False
     elif "程式設計類" in q:
         args["classify"] = "程式設計類"
+    if re.search(r"遠距|線上課|線上授課|非同步", q):
+        args["classify"] = "遠距教學類"
+    elif re.search(r"產業實習|實習課", q):
+        args["classify"] = "產業實習類"
 
     # 「沒有期末考」「不用考試」→ 依評量清單查
     m = re.search(r"(?:沒有|不用|無|不需要|免)\s*(期末考|期中考|期末報告|口頭報告|考試|考)", q)
@@ -130,7 +176,8 @@ ROUTER_PROMPT = """你是輔仁大學選課助理的 Router。你的唯一工作
 - 課名、老師、系所請照抄「問題中出現的已知名稱」，不要自己改寫。
 - 一定要呼叫工具，不要直接回答。"""
 
-ROUTER_HIDDEN_TOOLS = {"index_status", "match_terms"}   # 系統內部用，不讓 Router 選
+# 系統內部或管理用，不讓 Router 選（學生問問題不會觸發抓取官網、寫入資料庫）
+ROUTER_HIDDEN_TOOLS = {"index_status", "match_terms", "sync_status", "check_outline_updates", "refresh_course"}
 
 
 def tool_specs(tools):
@@ -142,7 +189,9 @@ def tool_specs(tools):
             continue
         schema = dict(info.get("schema") or {"type": "object", "properties": {}})
         schema.pop("$schema", None)
-        out.append({"name": name, "description": info.get("description", "")[:900], "parameters": schema})
+        # 只送說明的第一段（Args 之前），省 token：免費額度是以 token 計算的
+        desc = info.get("description", "").split("Args:")[0].strip()
+        out.append({"name": name, "description": desc[:400], "parameters": schema})
     return out
 
 
@@ -208,6 +257,8 @@ def _ground_value(key, value, question, catalog, rule_args):
     if not isinstance(value, str):
         return value, None                         # 數字、布林不受錯字影響
     v = value.strip()
+    if key == "req_type" and "還是" in question:
+        return None, f"req_type「{v}」：問題是在問必修還是選修，不是篩選條件 → 刪除"
     if key in ENUMS:
         if v in ENUMS[key]:
             return v, None
@@ -270,7 +321,7 @@ def route(question, tools, catalog, llm=None, last_courses=(), terms=None):
     """回傳 {"calls": [...], "reason": str, "by": "llm"|"rules", "injection": [...]}"""
     injection = detect_injection(question)
     last_ids = [c["id"] for c in last_courses]
-    rule_plan = rule_route(question, catalog, last_ids)
+    rule_plan = rule_route(question, catalog, last_ids, last_courses)
 
     # 追問（它、那門…）由規則處理：課號來自上一輪的工具結果，不讓 LLM 重寫
     is_followup = rule_plan.get("clarify") or any(c["tool"] == "get_course" for c in rule_plan["calls"])
@@ -287,7 +338,7 @@ def route(question, tools, catalog, llm=None, last_courses=(), terms=None):
                                     f"\n\n使用者問題：{question}"},
     ]
     try:
-        if hasattr(llm, "tool_call"):
+        if getattr(llm, "supports_tools", hasattr(llm, "tool_call")):
             raw_calls, text = llm.tool_call(messages, tool_specs(tools))
             plan = {"calls": raw_calls} if raw_calls else extract_json(text)   # 沒用 tool calling 就讀 JSON 文字
         else:

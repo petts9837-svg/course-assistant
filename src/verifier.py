@@ -14,6 +14,7 @@ Answer agent 寫出草稿後，Verifier 拿草稿逐句對照 MCP 工具「實�
 任何一條不符合就不通過，problems 會列出每一個問題，交給 Answer agent 修正或改用安全回答。
 """
 
+import json
 import re
 
 NO_DATA = "查無資料"
@@ -116,6 +117,12 @@ def verify(answer, evidence, catalog=None, question=""):
         problems.append(f"回答提到「{n}」，但工具結果中沒有這門課（疑似編造）")
     for t in sorted(_names_in(text, catalog["teachers"]) - ev_teachers - allowed_extra):
         problems.append(f"回答提到老師「{t}」，但工具結果中沒有這位老師的課")
+
+    # 3b. 用「」引用的名稱必須出現在工具資料或問題裡（抓「推薦「資料結構」」這類資料庫沒有的課名）
+    ev_text = json.dumps([e.get("result") for e in evidence], ensure_ascii=False)
+    for q in re.findall(r"[「『]([^」』\n]{2,20})[」』]", text):
+        if q != NO_DATA and q not in ev_text and q not in question:
+            problems.append(f"回答引用了「{q}」，但工具資料和問題裡都沒有（疑似編造）")
 
     # 4. 每一行的學分、老師
     for line in text.splitlines():

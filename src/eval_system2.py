@@ -123,7 +123,7 @@ def main():
                      "verified": all(t["verified"] for t in traces), "blocked_drafts": blocked,
                      "tools": [f"{s['tool']}({', '.join(f'{k}={v}' for k, v in s['args'].items())})"
                                for t in traces for s in t["steps"] if s["step"] == "tool"],
-                     "latency_s": final["latency_s"]})
+                     "latency_s": final["latency_s"], "llm_error": final.get("llm_error")})
 
     passed = sum(r["pass"] for r in rows)
     lines = [
@@ -133,6 +133,9 @@ def main():
         f"- System 2 模式：{bot.mode}",
         f"- 資料：System 1 紀錄來自 47 門課的索引（2026-10-30）；System 2 與標準答案使用 courses.db 的 {TOTAL} 門課",
         "- 標準答案由本腳本的獨立 SQL 計算，不經過 MCP Server",
+        "",
+        (f"> ⚠️ 其中 {sum(1 for r in rows if r['llm_error'])} 題因 LLM 無法使用改用離線規則回答，"
+         "這次結果不能代表 LLM 模式。" if any(r["llm_error"] for r in rows) else ""),
         "",
         f"**結果：{passed} / {len(rows)} 題正確**；回應時間中位數 {statistics.median(latencies):.2f} 秒"
         f"（最慢 {max(latencies):.2f} 秒）",

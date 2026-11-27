@@ -24,6 +24,7 @@ SERVERS_DIR = Path(__file__).resolve().parent / "mcp_servers"
 SERVERS = {
     "course-sql": SERVERS_DIR / "course_sql_server.py",
     "course-search": SERVERS_DIR / "course_search_server.py",
+    "fju-sync": SERVERS_DIR / "fju_sync_server.py",
 }
 
 

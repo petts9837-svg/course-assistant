@@ -58,6 +58,34 @@ with st.sidebar:
                 f"- 向量索引：{idx['vector_indexed']} / {idx['keyword_indexed']} 門"
                 + ("" if idx["vector_available"] else "（向量搜尋未啟用，使用 BM25）"))
     st.caption("MCP Servers：" + "、".join(sorted({v['server'] for v in hub.tools.values()})))
+    with st.expander("資料同步（fju-sync）"):
+        sync = hub.call("sync_status", {})
+        if sync.get("error"):
+            st.caption(f"fju-sync 無法使用：{sync['error']}")
+        else:
+            st.caption(f"資料庫更新：{sync['db_updated']}　向量索引：{sync['index_updated'] or '無'}"
+                       + ("　⚠️ 索引需要重建" if sync["index_needs_rebuild"] else ""))
+            cid = st.text_input("課號", placeholder="例如 749446", key="sync_id")
+            if st.button("檢查官網是否更新", disabled=not cid.strip().isdigit(), use_container_width=True):
+                with st.spinner("向輔大課程大綱系統查詢中（約 5 秒）…"):
+                    st.session_state.sync_result = hub.call("check_outline_updates", {"course_id": int(cid)})
+            res = st.session_state.get("sync_result")
+            if res:
+                if res.get("error") or not res.get("found", True):
+                    st.warning(res.get("error") or "查無資料")
+                elif res.get("changed") is False:
+                    st.success(f"{res['name']}：和官網一致")
+                elif res.get("changed"):
+                    st.warning(f"{res['name']}：官網內容已更新")
+                    st.caption("評量（資料庫）：" + "、".join(res["assessment_before"]))
+                    st.caption("評量（官網）：" + "、".join(res["assessment_now"]))
+                    if st.button("寫入資料庫", type="primary", use_container_width=True):
+                        st.session_state.sync_result = hub.call(
+                            "refresh_course", {"course_id": res["id"], "confirm": True})
+                        st.rerun()
+                elif res.get("written"):
+                    st.success(f"{res['name']} 已更新：" + "、".join(res["assessment_now"]))
+                    st.caption(res.get("hint") or "")
     show_trace = st.toggle("顯示查核過程", value=True)
     s1 = get_system1()
     compare = st.toggle("同時顯示 System 1 回答（對照）", value=False, disabled=s1 is None,
@@ -100,6 +128,8 @@ def render_turn(turn):
             if len(cols) == 2:
                 st.markdown("**System 2**")
             st.markdown(tr["answer"].replace("\n", "  \n"))
+            if tr.get("llm_error"):
+                st.warning(f"LLM 暫時無法使用（{tr['llm_error']}），這題改用離線規則模式回答；答案一樣經過 Verifier 查核。")
             fixed = len(tr["attempts"]) > 1 or any(s["step"] == "fallback" for s in tr["steps"])
             badge = ("✅ 通過查核" if not fixed else "🛡️ 草稿被攔截，已修正後通過") if tr["verified"] else "⛔ 未通過查核"
             st.caption(f"{badge} · {tr['latency_s']} 秒 · Router：{tr['router_by']}"

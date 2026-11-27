@@ -22,8 +22,8 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
 | 元件 | 檔案 | 狀態 |
 |---|---|---|
 | MCP Server：course-sql | `src/mcp_servers/course_sql_server.py` | 已完成 |
-| MCP Server：course-search | `src/mcp_servers/course_search_server.py` | 已完成（向量索引待重建為 479 門） |
-| MCP Server：fju-sync | — | 規劃中（爬蟲 `fju_list_scraper.py`、`fju_outline_fetcher.py` 已有） |
+| MCP Server：course-search | `src/mcp_servers/course_search_server.py` | 已完成（向量索引 479 門） |
+| MCP Server：fju-sync | `src/mcp_servers/fju_sync_server.py` | 已完成：檢查資料新鮮度、與官網比對、確認後更新 |
 | MCP Client | `src/mcp_hub.py` | 已完成：stdio 啟動兩個 Server、保持連線、讀取 Resource |
 | Guard | `src/router_agent.py` | 已完成（規則式） |
 | Router agent | `src/router_agent.py` | 已完成：LLM 原生 tool calling（工具清單＝MCP Server 宣告的 schema），參數經 match_terms 與規則校正；失敗退回規則 |
@@ -52,10 +52,24 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
 
 | 工具 | 用途 |
 |---|---|
-| `search_courses` | 描述型問題（「想學資料分析」）：BM25 關鍵字 + bge-m3 向量，以 RRF 合併；關鍵字至少命中一半、向量相似度 ≥ 0.55 才算相關；回傳 `exhaustive=false` |
+| `search_courses` | 描述型問題（「想學資料分析」）：BM25 關鍵字 + bge-m3 向量，以 RRF 合併；回傳 `exhaustive=false` |
 | `index_status` | 向量索引涵蓋幾門課、向量搜尋是否可用 |
 
-沒有 Cloudflare 憑證時自動退回純 BM25，回傳的 `mode_used` 會標示。
+相關度規則：
+- 短關鍵詞（≤ 3 個 bigram，例如「區塊鏈」「天文學」）必須在大綱裡整個詞出現；只在參考書目出現半個詞（「區塊鍊革命」）不算。
+- 長句：完整關鍵詞出現，或 bigram 至少命中一半。排序：關鍵詞在課名 > 在大綱 > BM25 分數。
+- 向量：有關鍵字命中的課，相似度 ≥ 0.55 才加分；關鍵字沒命中、只靠向量的課，長句要 ≥ 0.65，短關鍵詞一律不採用。門檻用 `python src/tune_search.py` 校正。
+- 沒有 Cloudflare 憑證時自動退回純 BM25，回傳的 `mode_used` 會標示。
+
+## fju-sync 工具
+
+| 工具 | 用途 |
+|---|---|
+| `sync_status` | 課程數、學年期、資料庫與向量索引的更新時間、缺大綱的課、索引是否需要重建 |
+| `check_outline_updates` | 向輔大課程大綱系統重新抓一門課，與資料庫比對（唯讀）；回傳評量清單前後差異 |
+| `refresh_course` | 重新抓一門課並寫入資料庫；`confirm=true` 才寫入 |
+
+這三個工具不給 Router 使用：學生問問題不會觸發抓取官網或寫入資料庫，只能從介面的「資料同步」區塊操作。沿用期中的爬蟲（每次請求間隔 1 秒以上）。
 
 ## Verifier 檢查項目
 
@@ -66,6 +80,9 @@ System 1 的失敗（詳見 `VERIFICATION_LOG.md`）多半是結構化問題交�
 5. 「共 N 門」必須等於工具的 `count`；搜尋結果不能寫總數
 6. 「沒有期末考」「有期中考」「期中考 30%」必須與評量清單一致
 7. 「所有課都不用考試」這類全稱說法必須有資料支持
+8. 回答提到的上課星期必須是那門課真的有上課的日子
+9. 用「」引用的名稱必須出現在工具資料或問題裡
+10. 工具有資料時，回答必須引用至少一門查到的課，不能說「查無資料」（搜尋結果都不相關時例外）
 
 不通過時，問題清單會回饋給 Answer agent 重寫一次；仍不通過就改用工具資料直接產生的安全回答。
 
@@ -77,13 +94,15 @@ streamlit run src/app.py              # System 2 網頁
 python src/pipeline.py "問題"          # 命令列，印出每一步
 python tests/test_system2.py          # 自動測試（假 LLM，不需要 API key）
 python src/eval_system2.py            # System 1 vs System 2 對照報告 → docs/eval_system2.md
+python src/benchmark_system2.py       # 期中 33 題 + 5 題冷門主題 → docs/benchmark_system2.md
+python src/tune_search.py             # 校正向量相似度門檻（需要 API key）
 python src/demos/demo_client.py       # MCP Client 示範
 python src/demos/verifier_demo.py     # Verifier 示範
 ```
 
 資料庫預設為專案根目錄的 `courses.db`，可用環境變數 `COURSES_DB` 指定。
 
-## 測試結果（479 門課，離線模式）
+## 測試結果（479 門課）
 
 | 問題 | 回傳 |
 |---|---|
@@ -101,6 +120,5 @@ python src/demos/verifier_demo.py     # Verifier 示範
 ## 已知限制
 
 - 「沒有期末考」是依官方評量清單判斷；清單沒列出不代表老師一定不考。
-- 向量索引目前只涵蓋 47 門課（期中 System 1 的範圍），需執行 `python rag_core.py build` 重建。
-- Verifier 只能辨認資料庫裡存在的課名與老師；完全不存在的名稱，若沒有附課號或可核對的數字就攔不到。
-- LLM 模式需要 Cloudflare 憑證；上表為離線模式結果，接上 LLM 後需重跑 `src/eval_system2.py`。
+- Verifier 檢查能和資料比對的事實（課號、課名、老師、學分、總數、星期、評量、引用名稱）；不涉及這些的錯誤描述（例如編造課程內容）攔不到。
+- `refresh_course` 寫入新資料後，向量索引要重新執行 `python rag_core.py build` 才會更新；`sync_status` 會提示。

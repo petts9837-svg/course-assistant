@@ -112,7 +112,7 @@ The table below comes from `python src/eval_system2.py`. Ground truth is compute
 
 ### Verifier: drafts it blocks
 
-`python tests/test_system2.py` runs 45 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 45 pass. Examples:
+`python tests/test_system2.py` runs 64 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 64 pass. Examples:
 
 | Faulty draft | Verifier finding | Outcome |
 | --- | --- | --- |
@@ -160,7 +160,7 @@ An AI assistant helped draft this log, write the test scripts and compute the gr
 - [ ] Compare each quoted answer with `data/qa_log.jsonl`
 - [ ] Re-run `python src/demos/demo_client.py` and `python src/demos/verifier_demo.py` and confirm the counts (90, 12, 25, 192) and the 6 Verifier outcomes
 - [ ] Re-run F-01 to F-03 in hybrid mode and add the results
-- [ ] Run `python tests/test_system2.py` (45 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
+- [ ] Run `python tests/test_system2.py` (64 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
 - [ ] Rebuild the vector index for all 479 courses (`python rag_core.py build`) and re-run the evaluation
 
 | Reviewer | Date | Items checked |
