@@ -136,9 +136,11 @@ def verify(answer, evidence, catalog=None, question=""):
                 problems.append(f"{c['name']}（{ids[0]}）老師應為 {c.get('teacher')}，回答寫 {t}")
         _check_assessment_claims(line, [c], problems)
 
-    # 只有一門課的資料（例如 get_course 追問）時，整段回答都套用評量檢查
+    # 只有一門課的資料（例如 get_course 追問）時，整段回答都套用評量與上課星期檢查
     if len(courses) == 1:
-        _check_assessment_claims(text, list(courses.values()), problems)
+        only = next(iter(courses.values()))
+        _check_assessment_claims(text, [only], problems)
+        _check_weekdays(text, only, problems)
 
     # 5. 總數
     for m in re.finditer(r"共\s*(\d+)\s*(?:門|個班|堂|筆|班)", text):
@@ -167,6 +169,30 @@ def verify(answer, evidence, catalog=None, question=""):
             uniq.append(p)
     return {"ok": not uniq, "problems": uniq,
             "checked": {"courses_in_evidence": len(courses), "ids_in_answer": len(ids_in_text)}}
+
+
+WEEKDAY_NUM = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7, "天": 7}
+
+
+def weekdays_in(text):
+    """找出文字中提到的星期：「星期一、星期五」「週一及週四」「星期一、五」「週1」都算。"""
+    days = set()
+    for m in re.finditer(r"(?:星期|週|周|禮拜)([一二三四五六日天1-7](?:\s*[、，,和及與跟]\s*[一二三四五六日天])*)", text):
+        for ch in re.findall(r"[一二三四五六日天1-7]", m.group(1)):
+            days.add(int(ch) if ch.isdigit() else WEEKDAY_NUM[ch])
+    return days
+
+
+def _check_weekdays(text, course, problems):
+    """回答中提到的上課星期必須是這門課真的有上課的日子（2026-11-27 實測：LLM 把週四寫成星期五）。"""
+    real = {int(s["weekday"]) for s in course.get("schedules", []) if str(s.get("weekday", "")).strip().isdigit()}
+    if not real:
+        return
+    wrong = weekdays_in(text) - real
+    if wrong:
+        names = "、".join(f"星期{'一二三四五六日'[d - 1]}" for d in sorted(real))
+        problems.append(f"{course['name']}（{course['id']}）在{names}上課，回答卻提到"
+                        + "、".join(f"星期{'一二三四五六日'[d - 1]}" for d in sorted(wrong)))
 
 
 def _check_assessment_claims(text, cands, problems):

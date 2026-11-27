@@ -21,6 +21,7 @@ ROOT = SRC.parent
 sys.path.insert(0, str(SRC))
 
 from pipeline import Assistant  # noqa: E402
+from verifier import weekdays_in  # noqa: E402
 
 DB = ROOT / "courses.db"
 QA_LOG = ROOT / "data" / "qa_log.jsonl"
@@ -61,6 +62,8 @@ GT_WU_MID = sql("""SELECT m.percent FROM courses c JOIN methods m ON m.jonCouSn=
     WHERE c.tchCNa='吳周駿' AND m.mName='學習評量' AND m.method_name='期中考'""")
 GT_PROG1 = sql("""SELECT c.jonCouSn, c.tchCNa FROM courses c JOIN outline_fields f ON f.jonCouSn=c.jonCouSn
     WHERE TRIM(c.couCNa)='程式設計(一)' AND f.dept_class='資工一乙'""")
+GT_PROG1_DAYS = {int(r[0]) for r in sql("""SELECT DISTINCT TRIM(couWek) FROM schedules
+    WHERE jonCouSn = ? AND TRIM(couWek) != ''""", GT_PROG1[0][0])} if GT_PROG1 else set()
 GT_QUANTUM = sql("SELECT COUNT(*) FROM courses WHERE couCNa LIKE '%量子%'")[0][0]
 GT_ANY_EXAM_FREE = sql("""SELECT COUNT(*) FROM courses c
     WHERE NOT EXISTS (SELECT 1 FROM methods m WHERE m.jonCouSn=c.jonCouSn AND m.mName='學習評量'
@@ -84,8 +87,10 @@ CASES = [
      "truth": f"有，期中考 {GT_WU_MID[0][0]:g}%" if GT_WU_MID else "無",
      "check": lambda a: bool(GT_WU_MID) and f"期中考 {GT_WU_MID[0][0]:g}%" in a},
     {"id": "F-05", "type": "追問上下文", "turns": ["資工一乙的程式設計(一)是誰教的？", "那它在星期幾上課？"],
-     "truth": f"[{GT_PROG1[0][0]}] {GT_PROG1[0][1]}，追問要接回同一門" if GT_PROG1 else "無",
-     "check": lambda a: bool(GT_PROG1) and str(GT_PROG1[0][0]) in a and "週" in a},
+     "truth": (f"[{GT_PROG1[0][0]}] {GT_PROG1[0][1]}，追問要接回同一門，星期"
+               + "、".join("一二三四五六日"[d - 1] for d in sorted(GT_PROG1_DAYS))) if GT_PROG1 else "無",
+     "check": lambda a: bool(GT_PROG1) and str(GT_PROG1[0][0]) in a and bool(weekdays_in(a))
+                        and weekdays_in(a) <= GT_PROG1_DAYS},
     {"id": "T-07", "type": "超出資料範圍", "turns": ["輔大有開量子計算的課嗎？"],
      "truth": f"{GT_QUANTUM} 門 → 查無資料",
      "check": lambda a: a.strip() == "查無資料"},

@@ -82,7 +82,7 @@ Other commands (run from the project root):
 
 ```bash
 python src/pipeline.py "推薦 3 學分以上的選修課"   # one question, with the full trace
-python tests/test_system2.py                        # 42 automated checks, no API key needed
+python tests/test_system2.py                        # 45 automated checks, no API key needed
 python src/eval_system2.py                          # before/after report → docs/eval_system2.md
 python src/demos/demo_client.py                     # MCP client demo
 python src/demos/verifier_demo.py                   # Verifier demo with 6 faulty drafts

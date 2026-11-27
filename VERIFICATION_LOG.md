@@ -97,7 +97,7 @@ System 2 gives each failure to a tool or an agent: a Guard and a Router agent ch
 
 The table below comes from `python src/eval_system2.py`. Ground truth is computed by SQL written in that script, independently of the MCP servers. System 1 answers are quoted from `data/qa_log.jsonl` (47-course index, 2026-10-30); System 2 runs on all 479 courses, so the counts differ between the two columns and are not a like-for-like comparison.
 
-**Run status.** The results below were produced in offline mode (rule-based Router, answers built from tool data, Verifier on). The LLM mode (Llama 3.3 70B for the Router and Answer agents) must be re-run with Cloudflare credentials before submission, and this table updated.
+**Run status.** LLM mode (Llama 3.3 70B on Cloudflare for the Router and Answer agents), 2026-11-27: the first run scored 3 of 9, the second 5 of 9, and the third 9 of 9 after the fixes described below; median response time 3.55 s, slowest 8.19 s. The table shows the expected behaviour; the exact wording of each answer is in `docs/eval_system2.md`.
 
 | ID | Question | Ground truth (SQL, 479 courses) | System 1 output (before) | System 2 output (after) | Result |
 | --- | --- | --- | --- | --- | --- |
@@ -112,7 +112,7 @@ The table below comes from `python src/eval_system2.py`. Ground truth is compute
 
 ### Verifier: drafts it blocks
 
-`python tests/test_system2.py` runs 42 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 42 pass. Examples:
+`python tests/test_system2.py` runs 45 checks with a fake LLM that reproduces System 1's errors (no API key needed). All 45 pass. Examples:
 
 | Faulty draft | Verifier finding | Outcome |
 | --- | --- | --- |
@@ -136,7 +136,11 @@ The first LLM-mode run of `src/eval_system2.py` scored **3 of 9**. The Verifier 
 
 The second case is the dangerous one: the answer 「共 479 門」 was consistent with the tool output, so the Verifier passed it. Checking the answer against the tool is not enough when the tool was asked the wrong question.
 
-**Fix (argument grounding, `src/router_agent.py`).** The LLM still chooses the tool, but every text argument must appear in the student's own question or in the database's lists (`courses://catalog`); otherwise it is replaced by the value the rule parser extracted, or dropped. Enum arguments must be legal values. A filter whose conditions were all dropped is not run, so it cannot silently return all 479 courses. Follow-up questions keep the course ID from the previous turn instead of letting the LLM rewrite it. The Verifier was also extended: a line whose course ID is right but whose name or teacher is misspelled is blocked, and an answer that cites no course from the tool data (or says 「查無資料」 when the tool found courses) is blocked. Tests 11 and 12 in `tests/test_system2.py` replay the four garbled arguments above; all pass. The LLM-mode evaluation must be re-run to confirm the fix on the live model.
+**Fix (argument grounding, `src/router_agent.py`).** The LLM still chooses the tool, but every text argument must appear in the student's own question or in the database's lists (`courses://catalog`); otherwise it is replaced by the value the rule parser extracted, or dropped. Enum arguments must be legal values. A filter whose conditions were all dropped is not run, so it cannot silently return all 479 courses. Follow-up questions keep the course ID from the previous turn instead of letting the LLM rewrite it. The Verifier was also extended: a line whose course ID is right but whose name or teacher is misspelled is blocked, and an answer that cites no course from the tool data (or says 「查無資料」 when the tool found courses) is blocked. Tests 11 and 12 in `tests/test_system2.py` replay the four garbled arguments above; all pass.
+
+**Second LLM run (5 of 9) and fixes.** The Router sometimes called two tools for one question (so the single course was never looked up in full), dropped the class 資工一乙 from the filter (so a follow-up could not tell which of 9 sections was meant), and, once the vector index covered all 479 courses, vector search returned 程式設計概論 for 「量子計算」. Fixes: look up the full record whenever exactly one course is found; copy the teacher or class named in the question into the filter; require a higher vector similarity (0.65) for courses with no keyword match, and let the Answer agent say 「查無資料」 when search results are unrelated. The third run scored 9 of 9.
+
+**A hallucination the 9 of 9 run still let through.** Reading the answers line by line, F-05 said 程式設計(一) meets 「星期一、星期五」; the data says Monday and Thursday. The Verifier did not check weekdays and the evaluation only checked that a weekday was mentioned. Both now check it: a weekday in the answer must be one on which the course actually meets (test 15). Lesson: a passing score is not the same as a correct answer; we still read every answer.
 
 **Known limits.** "No final exam" is judged from the official assessment list; an unlisted exam does not prove none exists. The Verifier recognises course names and teachers that exist in `courses.db`; a fully invented name with no course ID or checkable number would pass. The vector index still covers 47 of 479 courses, so `course-search` currently relies mostly on keywords.
 
@@ -156,7 +160,7 @@ An AI assistant helped draft this log, write the test scripts and compute the gr
 - [ ] Compare each quoted answer with `data/qa_log.jsonl`
 - [ ] Re-run `python src/demos/demo_client.py` and `python src/demos/verifier_demo.py` and confirm the counts (90, 12, 25, 192) and the 6 Verifier outcomes
 - [ ] Re-run F-01 to F-03 in hybrid mode and add the results
-- [ ] Run `python tests/test_system2.py` (42 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
+- [ ] Run `python tests/test_system2.py` (45 checks) and `python src/eval_system2.py` with Cloudflare credentials (LLM mode), then update the before/after table
 - [ ] Rebuild the vector index for all 479 courses (`python rag_core.py build`) and re-run the evaluation
 
 | Reviewer | Date | Items checked |

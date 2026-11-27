@@ -204,6 +204,14 @@ check("F-05 指定班級 → filter_courses 只找到資工一乙那一班",
 ev = [{"tool": "search_courses", "args": {}, "result": hub.call("search_courses", {"query": "資料分析"})}]
 check("搜尋結果不相關時可以說查無資料", verifier.verify("查無資料", ev, catalog, "量子計算")["ok"])
 
+print("15. 上課星期寫錯（2026-11-27 實測：週四寫成星期五）")
+ev = [{"tool": "get_course", "args": {}, "result": hub.call("get_course", {"course_id": 743463})}]
+v = verifier.verify("程式設計(一) 在星期一、星期五上課。", ev, catalog, "那它在星期幾上課？")
+check("攔下錯的星期", not v["ok"] and any("星期五" in p for p in v["problems"]), v["problems"])
+v = verifier.verify("程式設計(一) 在星期一和星期四上課。\n- [743463] 程式設計(一)｜王國華｜3 學分", ev, catalog, "")
+check("正確星期通過", v["ok"], v["problems"])
+check("解析「星期一、五」", verifier.weekdays_in("星期一、五上課") == {1, 5})
+
 print(f"\n通過 {passed}，失敗 {failed}")
 hub.close()
 sys.exit(1 if failed else 0)
